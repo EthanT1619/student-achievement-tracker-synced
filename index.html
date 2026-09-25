@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Student Achievement Tracker — 시험 등록, 자동 채점, 영역별 성취도 분석 (개인 테스트용 프로토타입)">
+  <title>Student Achievement Tracker</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
+</head>
+<body>
+  <div id="auth-gate" class="auth-gate" aria-live="polite">
+    <div class="auth-gate__card">
+      <h1>Student Achievement Tracker</h1>
+      <p id="auth-gate-status">불러오는 중…</p>
+      <p class="auth-gate__hint">Google 계정으로 로그인합니다. 승인된 관리자·강사만 학사 화면을 사용할 수 있습니다.</p>
+      <div class="auth-gate__actions">
+        <button type="button" class="btn btn-primary" id="auth-google">Google로 로그인</button>
+        <button type="button" class="btn btn-secondary hidden" id="auth-gate-logout">로그아웃</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="app hidden" id="academic-app">
+    <header class="app-header no-print">
+      <div class="app-header__inner">
+        <div class="app-brand">
+          <h1>Student Achievement Tracker</h1>
+          <p>시험 등록 · 자동 채점 · 영역별 성취도 분석</p>
+        </div>
+        <div class="app-header__tools">
+          <div class="app-session" id="app-session">
+            <span id="app-session-label"></span>
+            <button type="button" class="btn btn-secondary btn-sm" data-action="refresh-cloud" title="클라우드에서 다시 불러오기">다시 불러오기</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="app-session-logout">로그아웃</button>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm header-help-btn no-print" data-action="open-help">도움말</button>
+        </div>
+      </div>
+      <nav class="app-nav" aria-label="주요 메뉴">
+        <button type="button" class="nav-link nav-link--active" data-nav="dashboard" data-view="dashboard">대시보드</button>
+        <button type="button" class="nav-link" data-nav="classes" data-view="classes">반·학생</button>
+        <button type="button" class="nav-link" data-nav="exams" data-view="exams">시험 설정</button>
+        <button type="button" class="nav-link" data-nav="answer-entry" data-view="answer-entry">답안 입력</button>
+        <button type="button" class="nav-link" data-nav="student-results" data-view="student-results">학생 결과</button>
+        <button type="button" class="nav-link" data-nav="exam-overview" data-view="exam-overview">시험 결과</button>
+        <button type="button" class="nav-link" data-nav="backup" data-view="backup">백업</button>
+      </nav>
+    </header>
+
+    <main id="main-content" class="app-main" role="main">
+      <div class="empty-state"><p>로딩 중…</p></div>
+    </main>
+  </div>
+
+  <div id="modal-overlay" class="modal-overlay hidden" aria-hidden="true"></div>
+  <div id="confirm-modal" class="modal hidden" role="alertdialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <h2 class="modal-title" id="confirm-modal-title">확인</h2>
+    <p class="modal-body"></p>
+    <div id="typed-confirm-fields" class="typed-confirm hidden">
+      <label class="form-label" for="typed-confirm-input">
+        <span id="typed-confirm-label">문제집 이름 입력</span>
+        <input type="text" id="typed-confirm-input" autocomplete="off" spellcheck="false">
+      </label>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" data-action="cancel">취소</button>
+      <button type="button" class="btn btn-primary" data-action="confirm">확인</button>
+    </div>
+  </div>
+
+  <div id="help-modal" class="modal modal--help hidden" role="dialog" aria-modal="true" aria-labelledby="help-modal-title">
+    <div class="help-modal__inner" id="help-modal-content"></div>
+  </div>
+
+  <div id="sr-display-modal" class="modal modal--display hidden" role="dialog" aria-modal="true" aria-labelledby="sr-display-modal-title">
+    <div id="sr-display-modal-content"></div>
+  </div>
+
+  <div id="toast-container" aria-live="polite"></div>
+
+  <script src="js/constants.js"></script>
+  <script src="js/utils.js"></script>
+  <script src="js/student-result-display-utils.js"></script>
+  <script src="js/help-guide.js"></script>
+  <script src="js/category-utils.js"></script>
+  <script src="js/level-utils.js"></script>
+  <script src="js/question-resize-utils.js"></script>
+  <script src="js/question-range-patch-utils.js"></script>
+  <script src="js/question-structure-utils.js"></script>
+  <script src="js/data-integrity-utils.js"></script>
+  <script src="js/exam-filter-utils.js"></script>
+  <script src="js/assessment-template-utils.js"></script>
+  <script src="js/storage-adapter.js"></script>
+  <script src="js/storage-repository.js"></script>
+  <script src="js/repository-error.js"></script>
+  <script src="js/cloud-mappers.js"></script>
+  <script src="js/supabase-config.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script src="js/auth-manager.js"></script>
+  <script src="js/cloud-repository.js"></script>
+  <script src="js/enrollment-view.js"></script>
+  <script src="js/p8-ux-contract.js"></script>
+  <script src="js/p9a-ux-contract.js"></script>
+  <script src="js/p9b-ux-contract.js"></script>
+  <script src="js/p9c1-ux-contract.js"></script>
+  <script src="js/p9c2-ux-contract.js"></script>
+  <script src="js/p9d-ux-contract.js"></script>
+  <script src="js/p9e-ux-contract.js"></script>
+  <script src="js/cloud-academic-store.js"></script>
+  <script src="js/assessment-view.js"></script>
+  <script src="js/cloud-assessment-store.js"></script>
+  <script src="js/result-view.js"></script>
+  <script src="js/cloud-result-store.js"></script>
+  <script src="js/assessment-manager.js"></script>
+  <script src="js/cloud-analytics.js"></script>
+  <script src="js/chart-manager.js"></script>
+  <script src="js/import-export-manager.js"></script>
+  <script src="js/answer-entry-manager.js"></script>
+  <script src="js/renderer.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/auth-gate.js"></script>
+</body>
+</html>
