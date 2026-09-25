@@ -4456,6 +4456,11 @@ async function runP996LogicTests() {
   assert(created.deleted === 'del1', 'admin delete of unused draft calls repo');
 
   const rendererSrc = readFileSync(join(root, 'js/renderer.js'), 'utf8');
+  assert(!/legacyCqAnswer/.test(rendererSrc), 'authoring renderer has no legacyCqAnswer reference');
+  const appSrcP996 = readFileSync(join(root, 'js/app.js'), 'utf8');
+  const storeSrcP996 = readFileSync(join(root, 'js/cloud-assessment-store.js'), 'utf8');
+  assert(!/legacyCqAnswer/.test(appSrcP996), 'create handler has no legacyCqAnswer reference');
+  assert(!/legacyCqAnswer/.test(storeSrcP996), 'createAssessment has no legacyCqAnswer reference');
   assert(rendererSrc.includes('표준 구성으로 시작'), 'create form uses generator copy');
   assert(rendererSrc.includes('표준 구성 불러오기'), 'empty draft can load generator');
   assert(!rendererSrc.includes('표준 CQ 구성 적용'), 'old lock copy is gone');

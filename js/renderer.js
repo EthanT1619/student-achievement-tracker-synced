@@ -1265,11 +1265,6 @@
           : ''
       }
       ${
-        legacyCqAnswers
-          ? '<p class="hint-text">이 버전의 정답이 1–4가 아닙니다. 이미 공개된 문항은 수정하지 마세요. 「새 버전 만들기」로 새 초안을 만든 뒤 1–4로 바꿔 공개하세요.</p>'
-          : ''
-      }
-      ${
         questions.length && canEdit
           ? `<form data-form="save-draft-questions" data-version-id="${version.id}" data-choice-count="${choiceCount}">
               ${this.renderAuthoringBulkBar(questions.length, choiceCount, { versionId: version.id, canEdit: true })}
