@@ -3501,7 +3501,7 @@ function runP9aLogicTests() {
   assert(rendererSrc.includes('status-alert--warning'), 'stale notice uses warning alert');
   assert(rendererSrc.includes('badge--readonly'), 'read-only uses distinct badge');
   assert(rendererSrc.includes('isExamOverviewTeacherView'), 'exam overview uses separate view helper');
-  assert(rendererSrc.includes('문제집 만들기'), 'create label is 문제집 만들기');
+  assert(rendererSrc.includes('시험 추가'), 'create label is 시험 추가');
 
   const appSrc = readFileSync(join(root, 'js/app.js'), 'utf8');
   assert(appSrc.includes('examOverviewView: STUDENT_RESULT_VIEW_TEACHER'), 'exam overview starts as teacher view');
@@ -4462,6 +4462,46 @@ async function runP996LogicTests() {
   assert(!/legacyCqAnswer/.test(appSrcP996), 'create handler has no legacyCqAnswer reference');
   assert(!/legacyCqAnswer/.test(storeSrcP996), 'createAssessment has no legacyCqAnswer reference');
   assert(rendererSrc.includes('표준 구성으로 시작'), 'create form uses generator copy');
+  assert(rendererSrc.includes('select-assessment-pack'), 'library opens assessment packs');
+  assert(rendererSrc.includes('시험 시행'), 'assign section is exam instance scheduling');
+  assert(rendererSrc.includes('assign-packKey'), 'assign filters by pack');
+  assert(rendererSrc.includes('PACK_COVERAGE_HINT'), 'coverage meaning is explained');
+  assert(!/Lesson 1–2, 3–4, 5–6/.test(rendererSrc), 'lesson pairs are not hardcoded in UI');
+
+  const packRows = SAT.composeLibraryRows([
+    { id: 'a1', title: 'DSC CQ', assessmentType: 'CQ', level: 'DSC', lessonStart: 1, lessonEnd: 24, active: true },
+    { id: 'a2', title: 'L7', assessmentType: 'CQ', level: 'DSC', lessonStart: 7, lessonEnd: 8, active: true },
+    { id: 'b1', title: 'Vocab', assessmentType: 'Vocabulary', level: 'DSC', lessonStart: 1, lessonEnd: 2, active: true },
+    { id: 'c1', title: 'LSA CQ', assessmentType: 'CQ', level: 'LSA', lessonStart: 13, lessonEnd: 14, active: true },
+  ], [
+    { id: 'v1', assessmentId: 'a2', status: 'published', versionNumber: 1 },
+    { id: 'v2', assessmentId: 'a1', status: 'draft', versionNumber: 1 },
+    { id: 'v3', assessmentId: 'b1', status: 'published', versionNumber: 1 },
+    { id: 'v4', assessmentId: 'c1', status: 'published', versionNumber: 1 },
+  ]);
+  const packs = SAT.composeAssessmentPacks(packRows);
+  assert(packs.length === 3, 'packs group by level and type');
+  const dscCq = packs.find((p) => p.packKey === 'DSC::CQ');
+  assert(dscCq && dscCq.testCount === 2, 'DSC CQ pack contains both stored CQ tests');
+  assert(dscCq.coverageStart === 1 && dscCq.coverageEnd === 24, 'pack coverage is min-max of member lesson ranges');
+  assert(SAT.formatPackCoverageLabel(dscCq) === '1–24', 'coverage label uses member ranges');
+  assert(SAT.formatTestDefinitionLabel({ lessonStart: 7, lessonEnd: 8 }) === 'Lesson 7–8', 'test label uses lesson range');
+  assert(SAT.defaultPackKeyForClass(packs, { level: 'DSC' }) === 'DSC::CQ', 'DSC class defaults to the only CQ pack');
+  const publishedOpts = SAT.publishedAssignOptionsForPack(dscCq, { level: 'DSC' });
+  assert(publishedOpts.length === 1 && publishedOpts[0].id === 'v1', 'assign lists published tests only');
+  assert(SAT.publishedAssignOptionsForPack(dscCq, { level: 'LSA' }).length === 0, 'other class levels cannot assign DSC tests');
+  assert(
+    SAT.formatExamInstanceListLabel({
+      level: 'DSC',
+      assessmentType: 'CQ',
+      lessonStart: 7,
+      lessonEnd: 8,
+      assessmentTitle: 'L7',
+    }) === 'DSC CQ · Lesson 7–8',
+    'instance label shows pack and lesson test'
+  );
+  assert(SAT.CQ_BLUEPRINTS[0].ranges[0].to === 10, 'CQ blueprint ranges are question majors, not curriculum lesson pairs');
+  assert(SAT.defaultTestDefinitionTitle(7, 8) === 'Lesson 7–8', 'new test title defaults from lesson range');
   assert(rendererSrc.includes('표준 구성 불러오기'), 'empty draft can load generator');
   assert(!rendererSrc.includes('표준 CQ 구성 적용'), 'old lock copy is gone');
   assert(rendererSrc.includes('delete-unused-assessment'), 'unused delete action exists');
@@ -4692,12 +4732,12 @@ function runP9eLogicTests() {
   assert(rendererSrc.includes('BACKUP_UNSUPPORTED_NOTICE'), 'backup uses honest unsupported notice');
   assert(rendererSrc.includes('BACKUP_STATUS_TITLE'), 'backup shows data status');
   assert(!/JSON보내기 \(클라우드 미지원\)/.test(rendererSrc), 'backup no longer shows broken export buttons');
-  assert(rendererSrc.includes('문제집 작성은 관리자만'), 'exam setup teacher copy is operator-facing');
+  assert(rendererSrc.includes('평가팩 작성은 관리자만'), 'exam setup teacher copy is operator-facing');
   assert(rendererSrc.includes('입력된 결과 평균'), 'exam overview dropped Result jargon');
 
   const appSrc = readFileSync(join(root, 'js/app.js'), 'utf8');
   assert(appSrc.includes("confirmModal && !confirmModal.classList.contains('hidden')"), 'app Escape defers to confirm dialog');
-  assert(appSrc.includes('문제집을 만들었습니다'), 'create toast uses 문제집');
+  assert(appSrc.includes('평가팩에 시험을 추가했습니다'), 'create toast uses 평가팩');
 
   const css = readFileSync(join(root, 'css/styles.css'), 'utf8');
   assert(css.includes('.btn:focus-visible'), 'buttons have visible keyboard focus');

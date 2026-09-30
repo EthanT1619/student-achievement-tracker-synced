@@ -74,8 +74,10 @@
         active: 'all',
         selectedAssessmentId: null,
         selectedVersionId: null,
+        selectedPackKey: '',
         assignClassId: '',
         assignVersionId: '',
+        assignPackKey: '',
         assignDate: '',
       },
       transfer: null,
@@ -126,8 +128,10 @@
       active: 'all',
       selectedAssessmentId: null,
       selectedVersionId: null,
+      selectedPackKey: '',
       assignClassId: '',
       assignVersionId: '',
+      assignPackKey: '',
       assignDate: '',
     };
   }
@@ -548,6 +552,7 @@
       'transfer-student': () => void this.openTransferStudent(action.dataset.id),
       'cancel-transfer': () => this.cancelTransfer(),
       'select-assessment': () => void this.selectAssessment(action.dataset.id),
+      'select-assessment-pack': () => this.selectAssessmentPack(action.dataset.packKey),
       'select-version': () => void this.selectAssessmentVersion(action.dataset.id),
       'create-draft-version': () => void this.createDraftVersion(action.dataset.assessmentId),
       'publish-version': () => void this.publishAssessmentVersion(action.dataset.id),
@@ -817,6 +822,12 @@
       },
       'assign-classId': () => {
         this.state.library.assignClassId = e.target.value;
+        this.state.library.assignPackKey = '';
+        this.state.library.assignVersionId = '';
+        this.renderer.render('exams');
+      },
+      'assign-packKey': () => {
+        this.state.library.assignPackKey = e.target.value;
         this.state.library.assignVersionId = '';
         this.renderer.render('exams');
       },
@@ -1738,6 +1749,10 @@
 
   async selectAssessment(id) {
     this.state.library.selectedAssessmentId = id;
+    const assessment = this.assessmentStore.getAssessment(id);
+    if (assessment) {
+      this.state.library.selectedPackKey = SAT.assessmentPackKey(assessment.level, assessment.assessmentType);
+    }
     const versions = this.assessmentStore.versionsFor(id);
     this.state.library.selectedVersionId = versions[0]?.id || null;
     if (this.state.library.selectedVersionId) {
@@ -1746,6 +1761,19 @@
       } catch (err) {
         this.cloudErrorToast(err);
       }
+    }
+    this.renderer.render('exams');
+  }
+
+  selectAssessmentPack(packKey) {
+    this.state.library.selectedPackKey = packKey || '';
+    const assessment = this.assessmentStore.getAssessment(this.state.library.selectedAssessmentId);
+    const currentKey = assessment
+      ? SAT.assessmentPackKey(assessment.level, assessment.assessmentType)
+      : '';
+    if (currentKey !== this.state.library.selectedPackKey) {
+      this.state.library.selectedAssessmentId = null;
+      this.state.library.selectedVersionId = null;
     }
     this.renderer.render('exams');
   }
@@ -1766,20 +1794,29 @@
     const result = await SAT.withMutationGuard(this, 'add-assessment', async () => {
       if (submit) submit.disabled = true;
       try {
+        const lessonStart = fd.get('lessonStart');
+        const lessonEnd = fd.get('lessonEnd');
+        const title = String(fd.get('title') || '').trim()
+          || SAT.defaultTestDefinitionTitle(lessonStart, lessonEnd)
+          || SAT.assessmentPackTitle(fd.get('level'), fd.get('assessmentType'));
         const created = await this.assessmentStore.createAssessment({
-          title: String(fd.get('title') || '').trim(),
+          title,
           assessmentType: fd.get('assessmentType'),
           level: fd.get('level'),
-          lessonStart: fd.get('lessonStart'),
-          lessonEnd: fd.get('lessonEnd'),
+          lessonStart,
+          lessonEnd,
           applyCqBlueprint: fd.get('applyCqBlueprint') === 'on',
           choiceCount: fd.get('choiceCount'),
         });
         showToast(created?.usedStandardBlueprint
-          ? '문제집을 만들었습니다.'
+          ? '평가팩에 시험을 추가했습니다.'
           : SAT.EMPTY_MANUAL_AUTHORING_HINT);
         form.reset();
         if (created?.assessment?.id) {
+          this.state.library.selectedPackKey = SAT.assessmentPackKey(
+            created.assessment.level,
+            created.assessment.assessmentType
+          );
           this.state.library.selectedAssessmentId = created.assessment.id;
           this.state.library.selectedVersionId = created.version?.id || null;
           if (created.version?.id) {

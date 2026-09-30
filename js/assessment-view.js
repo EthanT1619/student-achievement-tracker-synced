@@ -23,6 +23,10 @@
   SAT.DELETE_BLOCKED_EXAM = '시험 배정 이력이 있어 삭제할 수 없습니다.';
   SAT.DELETE_BLOCKED_RESULT = '시험 결과 이력이 있어 삭제할 수 없습니다.';
   SAT.PRIOR_PUBLISHED_HISTORY_NOTE = '이전 공개 이력 있음';
+  SAT.PACK_COVERAGE_HINT = '범위는 이 평가팩에 들어 있는 시험들의 레슨 구간입니다. 한 번에 그 전체를 보는 시험이 아닙니다.';
+  SAT.PACK_CREATE_HINT = '같은 레벨과 유형은 하나의 평가팩으로 묶입니다. 예: DSC CQ. 레슨 구간은 그 평가팩 안의 개별 시험입니다.';
+  SAT.PACK_ADD_TEST_LABEL = '평가팩에 시험 추가';
+  SAT.PACK_ADD_FIRST_TEST_LABEL = '평가팩의 첫 시험 만들기';
 
   SAT.isStandardCqAssessment = function isStandardCqAssessment(assessment) {
     return String(assessment?.assessmentType || '').trim().toUpperCase() === SAT.ASSESSMENT_TYPE_CQ;
@@ -380,6 +384,145 @@
       if (active === 'inactive' && row.active !== false) return false;
       return true;
     });
+  };
+
+  SAT.assessmentPackKey = function assessmentPackKey(level, assessmentType) {
+    const lvl = SAT.normalizeLevel ? SAT.normalizeLevel(level) : String(level || '').trim();
+    const type = String(assessmentType || '').trim();
+    if (!lvl || !type) return '';
+    return `${lvl}::${type}`;
+  };
+
+  SAT.assessmentPackTitle = function assessmentPackTitle(level, assessmentType) {
+    const lvl = SAT.normalizeLevel ? SAT.normalizeLevel(level) : String(level || '').trim();
+    const type = String(assessmentType || '').trim();
+    return [lvl, type].filter(Boolean).join(' ');
+  };
+
+  SAT.formatLessonRangeLabel = function formatLessonRangeLabel(start, end) {
+    if (start == null || start === '') return '';
+    const last = end == null || end === '' ? start : end;
+    return `${start}–${last}`;
+  };
+
+  SAT.formatTestDefinitionLabel = function formatTestDefinitionLabel(assessment) {
+    const range = SAT.formatLessonRangeLabel(assessment?.lessonStart, assessment?.lessonEnd);
+    if (range) return `Lesson ${range}`;
+    const title = String(assessment?.title || '').trim();
+    return title || '시험';
+  };
+
+  SAT.formatPackCoverageLabel = function formatPackCoverageLabel(pack) {
+    if (!pack || pack.coverageStart == null) return '—';
+    return SAT.formatLessonRangeLabel(pack.coverageStart, pack.coverageEnd);
+  };
+
+  SAT.defaultTestDefinitionTitle = function defaultTestDefinitionTitle(lessonStart, lessonEnd) {
+    const range = SAT.formatLessonRangeLabel(lessonStart, lessonEnd);
+    return range ? `Lesson ${range}` : '';
+  };
+
+  SAT.composeAssessmentPacks = function composeAssessmentPacks(libraryRows) {
+    const map = new Map();
+    (libraryRows || []).forEach((row) => {
+      const key = SAT.assessmentPackKey(row.level, row.assessmentType);
+      if (!key) return;
+      if (!map.has(key)) {
+        map.set(key, {
+          packKey: key,
+          title: SAT.assessmentPackTitle(row.level, row.assessmentType),
+          level: SAT.normalizeLevel ? SAT.normalizeLevel(row.level) : row.level,
+          assessmentType: String(row.assessmentType || '').trim(),
+          assessments: [],
+        });
+      }
+      map.get(key).assessments.push(row);
+    });
+    return [...map.values()].map((pack) => {
+      const starts = pack.assessments
+        .map((a) => Number(a.lessonStart))
+        .filter((n) => Number.isFinite(n));
+      const ends = pack.assessments
+        .map((a) => Number(a.lessonEnd))
+        .filter((n) => Number.isFinite(n));
+      const publishedTestCount = pack.assessments.filter((a) =>
+        (a.versions || []).some((v) => v.status === 'published')
+      ).length;
+      const statuses = pack.assessments.map((a) => a.latestVersionStatus).filter(Boolean);
+      let latestVersionStatus = '';
+      if (statuses.includes('published')) latestVersionStatus = 'published';
+      else if (statuses.includes('draft')) latestVersionStatus = 'draft';
+      else if (statuses.includes('archived')) latestVersionStatus = 'archived';
+      else latestVersionStatus = statuses[0] || '';
+      pack.assessments.sort((a, b) => {
+        const aStart = Number(a.lessonStart);
+        const bStart = Number(b.lessonStart);
+        if (Number.isFinite(aStart) && Number.isFinite(bStart) && aStart !== bStart) return aStart - bStart;
+        return String(a.title || '').localeCompare(String(b.title || ''), 'ko');
+      });
+      return {
+        ...pack,
+        testCount: pack.assessments.length,
+        publishedTestCount,
+        coverageStart: starts.length ? Math.min(...starts) : null,
+        coverageEnd: ends.length ? Math.max(...ends) : null,
+        latestVersionStatus,
+        anyActive: pack.assessments.some((a) => a.active !== false),
+      };
+    }).sort((a, b) => String(a.title).localeCompare(String(b.title), 'ko'));
+  };
+
+  SAT.filterAssessmentPacks = function filterAssessmentPacks(packs, { level, assessmentType, active } = {}) {
+    const lvl = SAT.normalizeLevel ? SAT.normalizeLevel(level) : String(level || '').trim();
+    const type = String(assessmentType || '').trim();
+    return (packs || []).filter((pack) => {
+      if (lvl && pack.level !== lvl) return false;
+      if (type && pack.assessmentType !== type) return false;
+      if (active === 'active' && pack.anyActive === false) return false;
+      if (active === 'inactive' && pack.anyActive !== false) return false;
+      return true;
+    });
+  };
+
+  SAT.packsForClassLevel = function packsForClassLevel(packs, cls) {
+    const lvl = SAT.normalizeLevel ? SAT.normalizeLevel(cls?.level) : String(cls?.level || '').trim();
+    if (!lvl) return packs || [];
+    return (packs || []).filter((pack) => pack.level === lvl);
+  };
+
+  SAT.defaultPackKeyForClass = function defaultPackKeyForClass(packs, cls) {
+    const list = SAT.packsForClassLevel(packs, cls);
+    if (list.length === 1) return list[0].packKey;
+    const cq = list.filter((pack) => pack.assessmentType === SAT.ASSESSMENT_TYPE_CQ);
+    if (cq.length === 1) return cq[0].packKey;
+    return '';
+  };
+
+  SAT.findAssessmentPack = function findAssessmentPack(packs, packKey) {
+    return (packs || []).find((pack) => pack.packKey === packKey) || null;
+  };
+
+  SAT.publishedAssignOptionsForPack = function publishedAssignOptionsForPack(pack, cls) {
+    const rows = SAT.filterPublishedAssessmentsForClass(pack?.assessments || [], cls);
+    return rows.flatMap((assessment) => (
+      SAT.publishedVersionsOf(assessment.versions).map((version) => ({
+        ...version,
+        assessmentId: assessment.id,
+        title: assessment.title,
+        level: assessment.level,
+        assessmentType: assessment.assessmentType,
+        lessonStart: assessment.lessonStart,
+        lessonEnd: assessment.lessonEnd,
+        testLabel: SAT.formatTestDefinitionLabel(assessment),
+      }))
+    ));
+  };
+
+  SAT.formatExamInstanceListLabel = function formatExamInstanceListLabel(row) {
+    const pack = SAT.assessmentPackTitle(row?.level, row?.assessmentType);
+    const test = SAT.formatTestDefinitionLabel(row);
+    if (pack && test) return `${pack} · ${test}`;
+    return row?.assessmentTitle || test || '—';
   };
 
   SAT.composeLibraryRows = function composeLibraryRows(assessments, versions) {

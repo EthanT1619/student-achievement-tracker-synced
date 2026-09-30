@@ -670,7 +670,7 @@
 
   renderExamInstanceTable(rows) {
     if (!rows.length) {
-      return renderEmptyState('배정된 클라우드 시험이 없습니다. 시험 설정에서 공개된 버전을 배정하세요.', {
+      return renderEmptyState('배정된 클라우드 시험이 없습니다. 시험 설정에서 평가팩의 공개된 시험을 골라 시행일을 지정하세요.', {
         actionLabel: SAT.PAGE_TITLE_EXAMS || '시험 설정',
         actionNav: 'exams',
       });
@@ -687,7 +687,7 @@
             );
             const counts = SAT.resultCompletionCounts(eligible, this.app.resultStore?.resultsForInstance(row.id) || []);
             return `<tr>
-            <td>${escapeHtml(row.assessmentTitle || '—')}</td>
+            <td>${escapeHtml(SAT.formatExamInstanceListLabel(row))}</td>
             <td>${escapeHtml(row.level || '—')}</td>
             <td>${row.lessonStart != null ? `${row.lessonStart}–${row.lessonEnd ?? ''}` : '—'}</td>
             <td>v${escapeHtml(String(row.versionNumber ?? ''))}</td>
@@ -1040,16 +1040,21 @@
       return;
     }
 
-    const rows = SAT.filterLibraryAssessments(store.libraryRows(), lib);
+    const libraryRows = SAT.filterLibraryAssessments(store.libraryRows(), lib);
+    const packs = SAT.filterAssessmentPacks(SAT.composeAssessmentPacks(libraryRows), lib);
+    const selectedPack = SAT.findAssessmentPack(packs, lib.selectedPackKey)
+      || SAT.findAssessmentPack(SAT.composeAssessmentPacks(store.libraryRows()), lib.selectedPackKey);
     const selected = store.getAssessment(lib.selectedAssessmentId);
     const versions = selected ? store.versionsFor(selected.id) : [];
     const selectedVersion = store.getVersion(lib.selectedVersionId) || versions[0] || null;
     const questions = selectedVersion ? store.questionsFor(selectedVersion.id) : [];
     const classes = data.classes || [];
     const assignClass = classes.find((c) => c.id === lib.assignClassId) || classes[0] || null;
-    const publishedForClass = SAT.filterPublishedAssessmentsForClass(store.libraryRows(), assignClass);
-    const assignVersions = publishedForClass
-      .flatMap((a) => SAT.publishedVersionsOf(a.versions).map((v) => ({ ...v, title: a.title, level: a.level })));
+    const assignPacks = SAT.packsForClassLevel(SAT.composeAssessmentPacks(store.libraryRows()), assignClass);
+    const assignPackKey = lib.assignPackKey
+      || SAT.defaultPackKeyForClass(assignPacks, assignClass);
+    const assignPack = SAT.findAssessmentPack(assignPacks, assignPackKey);
+    const assignVersions = SAT.publishedAssignOptionsForPack(assignPack, assignClass);
     const instanceRows = assignClass ? store.examInstancesForClass(assignClass.id) : [];
     const cqInfo = selected ? SAT.getCqBlueprintForLevel(selected.level) : { supported: false };
     const types = [...new Set(store.assessments.map((a) => a.assessmentType).filter(Boolean))];
@@ -1059,8 +1064,9 @@
       <section class="card">
         <div class="card-header"><h2>${escapeHtml(SAT.PAGE_TITLE_EXAMS || '시험 설정')}</h2></div>
         <div class="card-body">
-          ${author ? this.renderCreateAssessmentForm() : '<p class="hint-text">문제집 작성은 관리자만 할 수 있습니다. 공개된 문제집을 반에 배정하세요.</p>'}
-          <h3 class="section-heading">문제집</h3>
+          ${author ? '' : '<p class="hint-text">평가팩 작성은 관리자만 할 수 있습니다. 공개된 시험을 반에 시행하세요.</p>'}
+          <h3 class="section-heading">평가팩</h3>
+          <p class="hint-text">${escapeHtml(SAT.PACK_COVERAGE_HINT)}</p>
           <div class="form-row">
             <label class="form-label">레벨
               <select data-filter="library-level">
@@ -1085,35 +1091,34 @@
           </div>
           <div class="table-scroll">
             <table class="data-table">
-              <thead><tr><th>제목</th><th>유형</th><th>레벨</th><th>레슨</th><th>버전</th><th>최근 상태</th><th>작업</th></tr></thead>
+              <thead><tr><th>평가팩</th><th>유형</th><th>레벨</th><th>범위</th><th>버전</th><th>상태</th><th>시험 수</th><th>작업</th></tr></thead>
               <tbody>
                 ${
-                  rows.length
-                    ? rows.map((a) => `<tr class="${a.id === selected?.id ? 'class-row class-row--active' : ''}">
-                        <td>${escapeHtml(a.title)}</td>
-                        <td>${escapeHtml(a.assessmentType)}</td>
-                        <td>${escapeHtml(a.level)}</td>
-                        <td>${a.lessonStart != null ? `${a.lessonStart}–${a.lessonEnd ?? ''}` : '—'}</td>
-                        <td>${a.versionCount}</td>
-                        <td>${escapeHtml(SAT.formatAssessmentStatusLabel(a.latestVersionStatus))}${SAT.hasPriorPublishedAssessmentHistory(a.versions) ? `<span class="library-status-note">${escapeHtml(SAT.PRIOR_PUBLISHED_HISTORY_NOTE)}</span>` : ''}</td>
+                  packs.length
+                    ? packs.map((pack) => `<tr class="${pack.packKey === selectedPack?.packKey ? 'class-row class-row--active' : ''}">
+                        <td>${escapeHtml(pack.title)}</td>
+                        <td>${escapeHtml(pack.assessmentType)}</td>
+                        <td>${escapeHtml(pack.level)}</td>
+                        <td>${escapeHtml(SAT.formatPackCoverageLabel(pack))}</td>
+                        <td>${pack.assessments.reduce((n, a) => n + (a.versionCount || 0), 0)}</td>
+                        <td>${escapeHtml(SAT.formatAssessmentStatusLabel(pack.latestVersionStatus))}</td>
+                        <td>${pack.testCount}</td>
                         <td class="actions-cell">
-                          <button type="button" class="btn btn-secondary btn-sm" data-action="select-assessment" data-id="${a.id}">열기</button>
-                          ${author ? `<button type="button" class="btn btn-secondary btn-sm" data-action="edit-assessment-title" data-id="${a.id}">표시명</button>` : ''}
-                          ${author && a.active !== false ? `<button type="button" class="btn btn-secondary btn-sm" data-action="archive-assessment" data-id="${a.id}">비활성</button>` : ''}
-                          ${author && a.active === false ? `<button type="button" class="btn btn-secondary btn-sm" data-action="activate-assessment" data-id="${a.id}">활성</button>` : ''}
-                          ${this.renderLibraryDeleteControl(a, author, store)}
+                          <button type="button" class="btn btn-secondary btn-sm" data-action="select-assessment-pack" data-pack-key="${escapeHtml(pack.packKey)}">열기</button>
                         </td>
                       </tr>`).join('')
-                    : `<tr><td colspan="7">${renderEmptyState('등록된 문제집이 없습니다. 첫 문제집을 만들어주세요.')}</td></tr>`
+                    : `<tr><td colspan="8">${renderEmptyState('등록된 평가팩이 없습니다. 첫 시험을 추가하면 평가팩이 만들어집니다.')}</td></tr>`
                 }
               </tbody>
             </table>
           </div>
+          ${author && !selectedPack ? this.renderCreateAssessmentForm(null) : ''}
         </div>
       </section>
+      ${selectedPack ? this.renderAssessmentPackDetail(selectedPack, selected, author, store) : ''}
       ${selected ? this.renderAssessmentDetail(selected, versions, selectedVersion, questions, author, cqInfo) : ''}
       <section class="card">
-        <div class="card-header"><h2>반에 배정</h2></div>
+        <div class="card-header"><h2>시험 시행</h2></div>
         <div class="card-body">
           <form class="inline-form" data-form="assign-exam-instance">
             <div class="form-row">
@@ -1123,18 +1128,68 @@
                   ${classes.map((c) => `<option value="${c.id}" ${assignClass?.id === c.id ? 'selected' : ''}>${escapeHtml(c.name)} (${escapeHtml(c.level)})</option>`).join('')}
                 </select>
               </label>
-              <label class="form-label">공개 버전
-                <select name="assessmentVersionId" required>
+              <label class="form-label">평가팩
+                <select name="assignPackKey" data-filter="assign-packKey">
                   <option value="">선택</option>
-                  ${assignVersions.map((v) => `<option value="${v.id}" ${lib.assignVersionId === v.id ? 'selected' : ''}>${escapeHtml(v.title)} v${v.versionNumber}</option>`).join('')}
+                  ${assignPacks.map((pack) => `<option value="${escapeHtml(pack.packKey)}" ${assignPackKey === pack.packKey ? 'selected' : ''}>${escapeHtml(pack.title)}</option>`).join('')}
                 </select>
               </label>
-              <label class="form-label">실시일<input type="date" name="administeredDate" value="${escapeHtml(lib.assignDate || SAT.isoDateLocal())}" required></label>
-              <button type="submit" class="btn btn-primary">배정</button>
+              <label class="form-label">시험
+                <select name="assessmentVersionId" required>
+                  <option value="">선택</option>
+                  ${assignVersions.map((v) => `<option value="${v.id}" ${lib.assignVersionId === v.id ? 'selected' : ''}>${escapeHtml(v.testLabel)} v${v.versionNumber}</option>`).join('')}
+                </select>
+              </label>
+              <label class="form-label">시행일<input type="date" name="administeredDate" value="${escapeHtml(lib.assignDate || SAT.isoDateLocal())}" required></label>
+              <button type="submit" class="btn btn-primary">시험 생성</button>
             </div>
           </form>
-          <p class="hint-text">같은 버전을 같은 반에 다시 배정할 수 있습니다. 재시험 시 확인만 합니다.</p>
+          <p class="hint-text">반 레벨에 맞는 평가팩만 보입니다. 같은 시험을 다른 날짜·반에 다시 시행할 수 있습니다.</p>
           ${this.renderExamInstanceTable(instanceRows)}
+        </div>
+      </section>`;
+  }
+
+  renderAssessmentPackDetail(pack, selectedAssessment, author, store) {
+    const tests = pack.assessments || [];
+    return `
+      <section class="card">
+        <div class="card-header"><h2>${escapeHtml(pack.title)}</h2></div>
+        <div class="card-body">
+          <p>유형 ${escapeHtml(pack.assessmentType)} · 레벨 ${escapeHtml(pack.level)} · 범위 ${escapeHtml(SAT.formatPackCoverageLabel(pack))} · 시험 ${pack.testCount}개</p>
+          <p class="hint-text">${escapeHtml(SAT.PACK_COVERAGE_HINT)}</p>
+          <h3 class="section-heading">시험 목록</h3>
+          <div class="table-scroll">
+            <table class="data-table">
+              <thead><tr><th>시험</th><th>제목</th><th>문항</th><th>상태</th><th>작업</th></tr></thead>
+              <tbody>
+                ${
+                  tests.length
+                    ? tests.map((a) => {
+                      const latest = (a.versions || [])[0];
+                      const loaded = latest && store.hasLoadedQuestions?.(latest.id);
+                      const qCount = loaded ? (store.questionsFor(latest.id) || []).length : 0;
+                      const qLabel = loaded ? String(qCount) : '—';
+                      return `<tr class="${a.id === selectedAssessment?.id ? 'class-row class-row--active' : ''}">
+                        <td>${escapeHtml(SAT.formatTestDefinitionLabel(a))}</td>
+                        <td>${escapeHtml(a.title || '—')}</td>
+                        <td>${escapeHtml(qLabel)}</td>
+                        <td>${escapeHtml(SAT.formatAssessmentStatusLabel(a.latestVersionStatus))}${a.active === false ? ' · 비활성' : ''}${SAT.hasPriorPublishedAssessmentHistory(a.versions) ? `<span class="library-status-note">${escapeHtml(SAT.PRIOR_PUBLISHED_HISTORY_NOTE)}</span>` : ''}</td>
+                        <td class="actions-cell">
+                          <button type="button" class="btn btn-secondary btn-sm" data-action="select-assessment" data-id="${a.id}">열기</button>
+                          ${author ? `<button type="button" class="btn btn-secondary btn-sm" data-action="edit-assessment-title" data-id="${a.id}">표시명</button>` : ''}
+                          ${author && a.active !== false ? `<button type="button" class="btn btn-secondary btn-sm" data-action="archive-assessment" data-id="${a.id}">비활성</button>` : ''}
+                          ${author && a.active === false ? `<button type="button" class="btn btn-secondary btn-sm" data-action="activate-assessment" data-id="${a.id}">활성</button>` : ''}
+                          ${this.renderLibraryDeleteControl(a, author, store)}
+                        </td>
+                      </tr>`;
+                    }).join('')
+                    : `<tr><td colspan="5">${renderEmptyState('이 평가팩에 시험이 없습니다.')}</td></tr>`
+                }
+              </tbody>
+            </table>
+          </div>
+          ${author ? this.renderCreateAssessmentForm(pack) : ''}
         </div>
       </section>`;
   }
@@ -1163,25 +1218,35 @@
     </div>`;
   }
 
-  renderCreateAssessmentForm() {
+  renderCreateAssessmentForm(pack) {
     const levels = SAT.OFFICIAL_LEVELS || [];
-    const defaultLevel = 'DSC';
-    const showBlueprint = SAT.shouldShowCreateBlueprintOption('CQ', defaultLevel);
+    const locked = Boolean(pack?.level && pack?.assessmentType);
+    const defaultLevel = locked ? pack.level : 'DSC';
+    const defaultType = locked ? pack.assessmentType : 'CQ';
+    const showBlueprint = SAT.shouldShowCreateBlueprintOption(defaultType, defaultLevel);
     const summary = showBlueprint ? SAT.formatCqBlueprintSummary(defaultLevel) : '';
+    const heading = locked ? SAT.PACK_ADD_TEST_LABEL : SAT.PACK_ADD_FIRST_TEST_LABEL;
     return `<form class="inline-form" data-form="add-assessment">
+      <h3 class="section-heading">${escapeHtml(heading)}</h3>
       <div class="form-row">
-        <label class="form-label">제목<input type="text" name="title" required placeholder="예: DSC CQ 1"></label>
-        <label class="form-label">유형
+        <label class="form-label">표시 제목<input type="text" name="title" placeholder="비우면 Lesson 시작–끝"></label>
+        ${
+          locked
+            ? `<input type="hidden" name="assessmentType" value="${escapeHtml(defaultType)}">
+               <input type="hidden" name="level" value="${escapeHtml(defaultLevel)}">
+               <p class="hint-text">${escapeHtml(pack.title)} · ${escapeHtml(defaultType)} · ${escapeHtml(defaultLevel)}</p>`
+            : `<label class="form-label">유형
           <select name="assessmentType" data-create-assessment-field="type">
-            <option value="CQ" selected>CQ</option>
-            <option value="Generic">Generic</option>
+            <option value="CQ" ${defaultType === 'CQ' ? 'selected' : ''}>CQ</option>
+            <option value="Generic" ${defaultType === 'Generic' ? 'selected' : ''}>Generic</option>
           </select>
         </label>
         <label class="form-label">레벨
           <select name="level" required data-create-assessment-field="level">
             ${levels.map((lv) => `<option value="${lv}" ${lv === defaultLevel ? 'selected' : ''}>${lv}</option>`).join('')}
           </select>
-        </label>
+        </label>`
+        }
         <label class="form-label">레슨 시작<input type="number" name="lessonStart" min="1" value="1"></label>
         <label class="form-label">레슨 끝<input type="number" name="lessonEnd" min="1" value="2"></label>
         <label class="form-label" data-create-blueprint-option ${showBlueprint ? '' : 'hidden'}>
@@ -1193,8 +1258,9 @@
             <option value="5">5지선다</option>
           </select>
         </label>
-        <button type="submit" class="btn btn-primary">문제집 만들기</button>
+        <button type="submit" class="btn btn-primary">시험 추가</button>
       </div>
+      <p class="hint-text">${escapeHtml(SAT.PACK_CREATE_HINT)}</p>
       <p class="hint-text" data-create-blueprint-summary ${showBlueprint ? '' : 'hidden'}>${escapeHtml(summary)}</p>
       <p class="hint-text">${escapeHtml(SAT.CREATE_BLUEPRINT_HINT)}</p>
       <p class="hint-text" data-create-manual-hint ${showBlueprint ? 'hidden' : ''}>문항을 직접 구성합니다.</p>
@@ -1209,7 +1275,7 @@
       <section class="card">
         <div class="card-header"><h2>${escapeHtml(assessment.title)}</h2></div>
         <div class="card-body">
-          <p>유형 ${escapeHtml(assessment.assessmentType)} · 레벨 ${escapeHtml(assessment.level)} · 레슨 ${assessment.lessonStart != null ? `${assessment.lessonStart}–${assessment.lessonEnd ?? ''}` : '—'}</p>
+          <p>유형 ${escapeHtml(assessment.assessmentType)} · 레벨 ${escapeHtml(assessment.level)} · 이 시험 레슨 ${assessment.lessonStart != null ? `${assessment.lessonStart}–${assessment.lessonEnd ?? ''}` : '—'}</p>
           ${locked ? '<p class="hint-text">공개된 문제집의 기본 정보는 수정할 수 없습니다.</p>' : ''}
           ${author ? `<div class="btn-group"><button type="button" class="btn btn-secondary btn-sm" data-action="create-draft-version" data-assessment-id="${assessment.id}">새 초안 버전</button></div>` : ''}
           ${this.renderForceDeletePanel(assessment)}
