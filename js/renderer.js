@@ -1040,24 +1040,30 @@
       return;
     }
 
-    const libraryRows = SAT.filterLibraryAssessments(store.libraryRows(), lib);
-    const packs = SAT.filterAssessmentPacks(SAT.composeAssessmentPacks(libraryRows), lib);
+    const allRows = store.libraryRows();
+    const composedPacks = store.composedPacks ? store.composedPacks() : SAT.composeAssessmentPacks(store.packs || [], allRows);
+    const packs = SAT.filterAssessmentPacks(composedPacks, lib);
     const selectedPack = SAT.findAssessmentPack(packs, lib.selectedPackKey)
-      || SAT.findAssessmentPack(SAT.composeAssessmentPacks(store.libraryRows()), lib.selectedPackKey);
+      || SAT.findAssessmentPack(composedPacks, lib.selectedPackKey);
     const selected = store.getAssessment(lib.selectedAssessmentId);
     const versions = selected ? store.versionsFor(selected.id) : [];
     const selectedVersion = store.getVersion(lib.selectedVersionId) || versions[0] || null;
     const questions = selectedVersion ? store.questionsFor(selectedVersion.id) : [];
     const classes = data.classes || [];
     const assignClass = classes.find((c) => c.id === lib.assignClassId) || classes[0] || null;
-    const assignPacks = SAT.packsForClassLevel(SAT.composeAssessmentPacks(store.libraryRows()), assignClass);
+    const assignPacks = SAT.assignablePacksForClass(composedPacks, assignClass);
     const assignPackKey = lib.assignPackKey
       || SAT.defaultPackKeyForClass(assignPacks, assignClass);
     const assignPack = SAT.findAssessmentPack(assignPacks, assignPackKey);
     const assignVersions = SAT.publishedAssignOptionsForPack(assignPack, assignClass);
     const instanceRows = assignClass ? store.examInstancesForClass(assignClass.id) : [];
     const cqInfo = selected ? SAT.getCqBlueprintForLevel(selected.level) : { supported: false };
-    const types = [...new Set(store.assessments.map((a) => a.assessmentType).filter(Boolean))];
+    const types = [...new Set([
+      ...(store.packs || []).map((p) => p.assessmentType),
+      ...store.assessments.map((a) => a.assessmentType),
+    ].filter(Boolean))];
+    const unassigned = SAT.filterLibraryAssessments(SAT.unassignedLibraryAssessments(allRows), lib);
+    const linkablePacks = (composedPacks || []).filter((pack) => !SAT.isPackArchived(pack));
 
     main.innerHTML = `
       ${this.renderLegacyNotice(data)}
@@ -1065,8 +1071,10 @@
         <div class="card-header"><h2>${escapeHtml(SAT.PAGE_TITLE_EXAMS || '시험 설정')}</h2></div>
         <div class="card-body">
           ${author ? '' : '<p class="hint-text">평가팩 작성은 관리자만 할 수 있습니다. 공개된 시험을 반에 시행하세요.</p>'}
+          ${store.packLoadError ? `<p class="hint-text">${escapeHtml('평가팩 목록을 불러오지 못했습니다. 운영자가 P9.97 SQL PATCH를 적용해야 할 수 있습니다.')}</p>` : ''}
           <h3 class="section-heading">평가팩</h3>
           <p class="hint-text">${escapeHtml(SAT.PACK_COVERAGE_HINT)}</p>
+          ${author ? this.renderCreateAssessmentPackForm() : ''}
           <div class="form-row">
             <label class="form-label">레벨
               <select data-filter="library-level">
@@ -1085,7 +1093,7 @@
               <select data-filter="library-active">
                 <option value="all" ${lib.active === 'all' ? 'selected' : ''}>전체</option>
                 <option value="active" ${lib.active === 'active' ? 'selected' : ''}>활성</option>
-                <option value="inactive" ${lib.active === 'inactive' ? 'selected' : ''}>비활성</option>
+                <option value="inactive" ${lib.active === 'inactive' ? 'selected' : ''}>보관</option>
               </select>
             </label>
           </div>
@@ -1100,22 +1108,25 @@
                         <td>${escapeHtml(pack.assessmentType)}</td>
                         <td>${escapeHtml(pack.level)}</td>
                         <td>${escapeHtml(SAT.formatPackCoverageLabel(pack))}</td>
-                        <td>${pack.assessments.reduce((n, a) => n + (a.versionCount || 0), 0)}</td>
-                        <td>${escapeHtml(SAT.formatAssessmentStatusLabel(pack.latestVersionStatus))}</td>
+                        <td>${pack.versionCount || 0}</td>
+                        <td>${escapeHtml(SAT.formatPackStatusLabel(pack.status))}</td>
                         <td>${pack.testCount}</td>
                         <td class="actions-cell">
                           <button type="button" class="btn btn-secondary btn-sm" data-action="select-assessment-pack" data-pack-key="${escapeHtml(pack.packKey)}">열기</button>
+                          ${author && !SAT.isPackArchived(pack) ? `<button type="button" class="btn btn-secondary btn-sm" data-action="archive-assessment-pack" data-id="${escapeHtml(pack.id)}">보관</button>` : ''}
+                          ${author && SAT.isPackArchived(pack) ? `<button type="button" class="btn btn-secondary btn-sm" data-action="activate-assessment-pack" data-id="${escapeHtml(pack.id)}">보관 해제</button>` : ''}
+                          ${this.renderPackDeleteControl(pack, author, store)}
                         </td>
                       </tr>`).join('')
-                    : `<tr><td colspan="8">${renderEmptyState('등록된 평가팩이 없습니다. 첫 시험을 추가하면 평가팩이 만들어집니다.')}</td></tr>`
+                    : `<tr><td colspan="8">${renderEmptyState(SAT.PACK_EMPTY_LIST_HINT)}</td></tr>`
                 }
               </tbody>
             </table>
           </div>
-          ${author && !selectedPack ? this.renderCreateAssessmentForm(null) : ''}
+          ${author && unassigned.length ? this.renderUnassignedAssessments(unassigned, linkablePacks, selected, store) : ''}
         </div>
       </section>
-      ${selectedPack ? this.renderAssessmentPackDetail(selectedPack, selected, author, store) : ''}
+      ${selectedPack ? this.renderAssessmentPackDetail(selectedPack, selected, author, store, lib) : ''}
       ${selected ? this.renderAssessmentDetail(selected, versions, selectedVersion, questions, author, cqInfo) : ''}
       <section class="card">
         <div class="card-header"><h2>시험 시행</h2></div>
@@ -1150,14 +1161,115 @@
       </section>`;
   }
 
-  renderAssessmentPackDetail(pack, selectedAssessment, author, store) {
+  renderCreateAssessmentPackForm() {
+    const levels = SAT.OFFICIAL_LEVELS || [];
+    return `<form class="inline-form" data-form="add-assessment-pack">
+      <h3 class="section-heading">${escapeHtml(SAT.PACK_CREATE_LABEL)}</h3>
+      <div class="form-row">
+        <label class="form-label">평가팩 이름<input type="text" name="title" placeholder="예: DSC CQ" required></label>
+        <label class="form-label">레벨
+          <select name="level" required>
+            ${levels.map((lv) => `<option value="${lv}" ${lv === 'DSC' ? 'selected' : ''}>${lv}</option>`).join('')}
+          </select>
+        </label>
+        <label class="form-label">유형
+          <select name="assessmentType" required>
+            <option value="CQ" selected>CQ</option>
+            <option value="Generic">Generic</option>
+          </select>
+        </label>
+        <button type="submit" class="btn btn-primary">${escapeHtml(SAT.PACK_CREATE_LABEL)}</button>
+      </div>
+      <p class="hint-text">${escapeHtml(SAT.PACK_CREATE_HINT)}</p>
+    </form>`;
+  }
+
+  renderPackDeleteControl(pack, author, store) {
+    if (!author) return '';
+    const reason = SAT.unusedPackDeleteReason(
+      pack,
+      store.examInstances,
+      this.app.resultStore?.results,
+    );
+    if (!reason) {
+      return `<button type="button" class="btn btn-secondary btn-sm" data-action="delete-unused-pack" data-id="${escapeHtml(pack.id)}">삭제</button>`;
+    }
+    return `<button type="button" class="btn btn-secondary btn-sm btn-unavailable" aria-disabled="true" title="${escapeHtml(reason)}" data-action="show-unused-pack-delete-reason" data-id="${escapeHtml(pack.id)}">삭제 불가</button>`;
+  }
+
+  renderUnassignedAssessments(rows, packs, selectedAssessment, store) {
+    return `
+      <h3 class="section-heading">미연결 시험</h3>
+      <p class="hint-text">${escapeHtml(SAT.UNASSIGNED_ASSESSMENTS_HINT)}</p>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>시험</th><th>유형</th><th>레벨</th><th>상태</th><th>작업</th></tr></thead>
+          <tbody>
+            ${rows.map((a) => {
+              const latest = (a.versions || [])[0];
+              return `<tr class="${a.id === selectedAssessment?.id ? 'class-row class-row--active' : ''}">
+                <td>${escapeHtml(SAT.formatTestDefinitionLabel(a))} · ${escapeHtml(a.title || '—')}</td>
+                <td>${escapeHtml(a.assessmentType || '—')}</td>
+                <td>${escapeHtml(a.level || '—')}</td>
+                <td>${escapeHtml(SAT.formatAssessmentStatusLabel(a.latestVersionStatus))}${a.active === false ? ' · 비활성' : ''}</td>
+                <td class="actions-cell">
+                  <button type="button" class="btn btn-secondary btn-sm" data-action="select-assessment" data-id="${a.id}">열기</button>
+                  ${a.active !== false ? `<button type="button" class="btn btn-secondary btn-sm" data-action="archive-assessment" data-id="${a.id}">보관</button>` : `<button type="button" class="btn btn-secondary btn-sm" data-action="activate-assessment" data-id="${a.id}">활성</button>`}
+                  ${this.renderLibraryDeleteControl(a, true, store)}
+                  ${packs.length ? `<form class="inline-form" data-form="link-assessment-pack">
+                    <input type="hidden" name="assessmentId" value="${a.id}">
+                    <label class="form-label">평가팩
+                      <select name="packId" required>
+                        <option value="">선택</option>
+                        ${packs.map((pack) => `<option value="${escapeHtml(pack.id)}">${escapeHtml(pack.title)}</option>`).join('')}
+                      </select>
+                    </label>
+                    <button type="submit" class="btn btn-secondary btn-sm">연결</button>
+                  </form>` : ''}
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  renderAssessmentPackDetail(pack, selectedAssessment, author, store, lib) {
     const tests = pack.assessments || [];
+    const editing = lib?.editingPackId === pack.id;
+    const levels = SAT.OFFICIAL_LEVELS || [];
     return `
       <section class="card">
         <div class="card-header"><h2>${escapeHtml(pack.title)}</h2></div>
         <div class="card-body">
-          <p>유형 ${escapeHtml(pack.assessmentType)} · 레벨 ${escapeHtml(pack.level)} · 범위 ${escapeHtml(SAT.formatPackCoverageLabel(pack))} · 시험 ${pack.testCount}개</p>
+          <p>유형 ${escapeHtml(pack.assessmentType)} · 레벨 ${escapeHtml(pack.level)} · 상태 ${escapeHtml(SAT.formatPackStatusLabel(pack.status))} · 범위 ${escapeHtml(SAT.formatPackCoverageLabel(pack))} · 시험 ${pack.testCount}개</p>
           <p class="hint-text">${escapeHtml(SAT.PACK_COVERAGE_HINT)}</p>
+          ${author ? `<div class="btn-group">
+            ${!SAT.isPackArchived(pack) ? `<button type="button" class="btn btn-secondary btn-sm" data-action="archive-assessment-pack" data-id="${escapeHtml(pack.id)}">보관</button>` : `<button type="button" class="btn btn-secondary btn-sm" data-action="activate-assessment-pack" data-id="${escapeHtml(pack.id)}">보관 해제</button>`}
+            <button type="button" class="btn btn-secondary btn-sm" data-action="toggle-edit-pack" data-id="${escapeHtml(pack.id)}">${editing ? '수정 닫기' : '평가팩 수정'}</button>
+            ${this.renderPackDeleteControl(pack, author, store)}
+          </div>` : ''}
+          ${author && editing ? `<form class="inline-form" data-form="edit-assessment-pack">
+            <input type="hidden" name="packId" value="${escapeHtml(pack.id)}">
+            <div class="form-row">
+              <label class="form-label">평가팩 이름<input type="text" name="title" value="${escapeHtml(pack.title)}" required></label>
+              <label class="form-label">레벨
+                <select name="level" required>
+                  ${levels.map((lv) => `<option value="${lv}" ${lv === pack.level ? 'selected' : ''}>${lv}</option>`).join('')}
+                </select>
+              </label>
+              <label class="form-label">유형
+                <select name="assessmentType" required>
+                  <option value="CQ" ${pack.assessmentType === 'CQ' ? 'selected' : ''}>CQ</option>
+                  <option value="Generic" ${pack.assessmentType === 'Generic' ? 'selected' : ''}>Generic</option>
+                  ${pack.assessmentType && pack.assessmentType !== 'CQ' && pack.assessmentType !== 'Generic'
+                    ? `<option value="${escapeHtml(pack.assessmentType)}" selected>${escapeHtml(pack.assessmentType)}</option>`
+                    : ''}
+                </select>
+              </label>
+              <button type="submit" class="btn btn-primary">저장</button>
+            </div>
+          </form>` : ''}
           <h3 class="section-heading">시험 목록</h3>
           <div class="table-scroll">
             <table class="data-table">
@@ -1178,13 +1290,13 @@
                         <td class="actions-cell">
                           <button type="button" class="btn btn-secondary btn-sm" data-action="select-assessment" data-id="${a.id}">열기</button>
                           ${author ? `<button type="button" class="btn btn-secondary btn-sm" data-action="edit-assessment-title" data-id="${a.id}">표시명</button>` : ''}
-                          ${author && a.active !== false ? `<button type="button" class="btn btn-secondary btn-sm" data-action="archive-assessment" data-id="${a.id}">비활성</button>` : ''}
+                          ${author && a.active !== false ? `<button type="button" class="btn btn-secondary btn-sm" data-action="archive-assessment" data-id="${a.id}">보관</button>` : ''}
                           ${author && a.active === false ? `<button type="button" class="btn btn-secondary btn-sm" data-action="activate-assessment" data-id="${a.id}">활성</button>` : ''}
                           ${this.renderLibraryDeleteControl(a, author, store)}
                         </td>
                       </tr>`;
                     }).join('')
-                    : `<tr><td colspan="5">${renderEmptyState('이 평가팩에 시험이 없습니다.')}</td></tr>`
+                    : `<tr><td colspan="5">${renderEmptyState('이 평가팩에 시험이 없습니다. 시험 추가로 Lesson 시험을 넣으세요.')}</td></tr>`
                 }
               </tbody>
             </table>
@@ -1220,14 +1332,14 @@
 
   renderCreateAssessmentForm(pack) {
     const levels = SAT.OFFICIAL_LEVELS || [];
-    const locked = Boolean(pack?.level && pack?.assessmentType);
+    const locked = Boolean(pack?.id && pack?.level && pack?.assessmentType);
     const defaultLevel = locked ? pack.level : 'DSC';
     const defaultType = locked ? pack.assessmentType : 'CQ';
     const showBlueprint = SAT.shouldShowCreateBlueprintOption(defaultType, defaultLevel);
     const summary = showBlueprint ? SAT.formatCqBlueprintSummary(defaultLevel) : '';
-    const heading = locked ? SAT.PACK_ADD_TEST_LABEL : SAT.PACK_ADD_FIRST_TEST_LABEL;
     return `<form class="inline-form" data-form="add-assessment">
-      <h3 class="section-heading">${escapeHtml(heading)}</h3>
+      <h3 class="section-heading">${escapeHtml(SAT.PACK_ADD_TEST_LABEL)}</h3>
+      ${locked ? `<input type="hidden" name="assessmentPackId" value="${escapeHtml(pack.id)}">` : ''}
       <div class="form-row">
         <label class="form-label">표시 제목<input type="text" name="title" placeholder="비우면 Lesson 시작–끝"></label>
         ${
@@ -1260,7 +1372,7 @@
         </label>
         <button type="submit" class="btn btn-primary">시험 추가</button>
       </div>
-      <p class="hint-text">${escapeHtml(SAT.PACK_CREATE_HINT)}</p>
+      <p class="hint-text">${escapeHtml(SAT.PACK_ADD_TEST_HINT)}</p>
       <p class="hint-text" data-create-blueprint-summary ${showBlueprint ? '' : 'hidden'}>${escapeHtml(summary)}</p>
       <p class="hint-text">${escapeHtml(SAT.CREATE_BLUEPRINT_HINT)}</p>
       <p class="hint-text" data-create-manual-hint ${showBlueprint ? 'hidden' : ''}>문항을 직접 구성합니다.</p>

@@ -18,15 +18,22 @@
   SAT.EMPTY_MANUAL_AUTHORING_HINT = '문항을 직접 구성합니다.';
   SAT.CREATE_BLUEPRINT_HINT = '기본 구성을 불러온 뒤 초안에서 자유롭게 수정할 수 있습니다.';
   SAT.UNUSED_ASSESSMENT_DELETE_BLOCKED = '공개 또는 사용 이력이 있는 문제집은 삭제할 수 없습니다. 필요하면 보관/비활성 처리하세요.';
-  SAT.DELETE_BLOCKED_PUBLISHED = '공개된 버전이 있어 삭제할 수 없습니다.';
+  SAT.DELETE_BLOCKED_PUBLISHED = '공개된 버전이 있어 삭제할 수 없습니다. 보관 처리할 수 있습니다.';
   SAT.DELETE_BLOCKED_ARCHIVED = '보관된 버전이 있어 삭제할 수 없습니다.';
-  SAT.DELETE_BLOCKED_EXAM = '시험 배정 이력이 있어 삭제할 수 없습니다.';
-  SAT.DELETE_BLOCKED_RESULT = '시험 결과 이력이 있어 삭제할 수 없습니다.';
+  SAT.DELETE_BLOCKED_EXAM = '이미 시행 기록이 있어 삭제할 수 없습니다. 보관 처리할 수 있습니다.';
+  SAT.DELETE_BLOCKED_RESULT = '이미 성적 기록이 있어 삭제할 수 없습니다. 보관 처리할 수 있습니다.';
   SAT.PRIOR_PUBLISHED_HISTORY_NOTE = '이전 공개 이력 있음';
   SAT.PACK_COVERAGE_HINT = '범위는 이 평가팩에 들어 있는 시험들의 레슨 구간입니다. 한 번에 그 전체를 보는 시험이 아닙니다.';
-  SAT.PACK_CREATE_HINT = '같은 레벨과 유형은 하나의 평가팩으로 묶입니다. 예: DSC CQ. 레슨 구간은 그 평가팩 안의 개별 시험입니다.';
-  SAT.PACK_ADD_TEST_LABEL = '평가팩에 시험 추가';
-  SAT.PACK_ADD_FIRST_TEST_LABEL = '평가팩의 첫 시험 만들기';
+  SAT.PACK_CREATE_HINT = '평가팩은 시험을 담는 묶음입니다. 먼저 평가팩을 만들고, 그 안에서 Lesson 시험을 추가합니다. 같은 레벨·유형으로 평가팩을 여러 개 둘 수 있습니다.';
+  SAT.PACK_CREATE_LABEL = '평가팩 만들기';
+  SAT.PACK_ADD_TEST_LABEL = '시험 추가';
+  SAT.PACK_ADD_TEST_HINT = '이 평가팩 안에 Lesson 시험을 추가합니다. 평가팩 만들기와 시험 추가는 다른 작업입니다.';
+  SAT.PACK_ADD_FIRST_TEST_LABEL = '평가팩에 시험 추가';
+  SAT.PACK_STATUS_ACTIVE = 'active';
+  SAT.PACK_STATUS_ARCHIVED = 'archived';
+  SAT.PACK_DELETE_BLOCKED_HISTORY = '이미 시행 기록이 있어 삭제할 수 없습니다. 보관 처리할 수 있습니다.';
+  SAT.UNASSIGNED_ASSESSMENTS_HINT = '평가팩에 연결되지 않은 시험입니다. 자동으로 옮기지 않습니다. 필요하면 연결하거나 보관/삭제하세요.';
+  SAT.PACK_EMPTY_LIST_HINT = '등록된 평가팩이 없습니다. 평가팩 만들기로 빈 평가팩을 만들 수 있습니다.';
 
   SAT.isStandardCqAssessment = function isStandardCqAssessment(assessment) {
     return String(assessment?.assessmentType || '').trim().toUpperCase() === SAT.ASSESSMENT_TYPE_CQ;
@@ -386,6 +393,20 @@
     });
   };
 
+  SAT.normalizePackStatus = function normalizePackStatus(status) {
+    return String(status || '').trim() === SAT.PACK_STATUS_ARCHIVED
+      ? SAT.PACK_STATUS_ARCHIVED
+      : SAT.PACK_STATUS_ACTIVE;
+  };
+
+  SAT.formatPackStatusLabel = function formatPackStatusLabel(status) {
+    return SAT.normalizePackStatus(status) === SAT.PACK_STATUS_ARCHIVED ? '보관됨' : '활성';
+  };
+
+  SAT.isPackArchived = function isPackArchived(pack) {
+    return SAT.normalizePackStatus(pack?.status) === SAT.PACK_STATUS_ARCHIVED;
+  };
+
   SAT.assessmentPackKey = function assessmentPackKey(level, assessmentType) {
     const lvl = SAT.normalizeLevel ? SAT.normalizeLevel(level) : String(level || '').trim();
     const type = String(assessmentType || '').trim();
@@ -422,54 +443,65 @@
     return range ? `Lesson ${range}` : '';
   };
 
-  SAT.composeAssessmentPacks = function composeAssessmentPacks(libraryRows) {
-    const map = new Map();
-    (libraryRows || []).forEach((row) => {
-      const key = SAT.assessmentPackKey(row.level, row.assessmentType);
-      if (!key) return;
-      if (!map.has(key)) {
-        map.set(key, {
-          packKey: key,
-          title: SAT.assessmentPackTitle(row.level, row.assessmentType),
-          level: SAT.normalizeLevel ? SAT.normalizeLevel(row.level) : row.level,
-          assessmentType: String(row.assessmentType || '').trim(),
-          assessments: [],
-        });
-      }
-      map.get(key).assessments.push(row);
+  SAT.sortPackAssessments = function sortPackAssessments(assessments) {
+    return (assessments || []).slice().sort((a, b) => {
+      const aStart = Number(a.lessonStart);
+      const bStart = Number(b.lessonStart);
+      if (Number.isFinite(aStart) && Number.isFinite(bStart) && aStart !== bStart) return aStart - bStart;
+      return String(a.title || '').localeCompare(String(b.title || ''), 'ko');
     });
-    return [...map.values()].map((pack) => {
-      const starts = pack.assessments
-        .map((a) => Number(a.lessonStart))
-        .filter((n) => Number.isFinite(n));
-      const ends = pack.assessments
-        .map((a) => Number(a.lessonEnd))
-        .filter((n) => Number.isFinite(n));
-      const publishedTestCount = pack.assessments.filter((a) =>
-        (a.versions || []).some((v) => v.status === 'published')
-      ).length;
-      const statuses = pack.assessments.map((a) => a.latestVersionStatus).filter(Boolean);
-      let latestVersionStatus = '';
-      if (statuses.includes('published')) latestVersionStatus = 'published';
-      else if (statuses.includes('draft')) latestVersionStatus = 'draft';
-      else if (statuses.includes('archived')) latestVersionStatus = 'archived';
-      else latestVersionStatus = statuses[0] || '';
-      pack.assessments.sort((a, b) => {
-        const aStart = Number(a.lessonStart);
-        const bStart = Number(b.lessonStart);
-        if (Number.isFinite(aStart) && Number.isFinite(bStart) && aStart !== bStart) return aStart - bStart;
-        return String(a.title || '').localeCompare(String(b.title || ''), 'ko');
-      });
-      return {
-        ...pack,
-        testCount: pack.assessments.length,
-        publishedTestCount,
-        coverageStart: starts.length ? Math.min(...starts) : null,
-        coverageEnd: ends.length ? Math.max(...ends) : null,
-        latestVersionStatus,
-        anyActive: pack.assessments.some((a) => a.active !== false),
-      };
-    }).sort((a, b) => String(a.title).localeCompare(String(b.title), 'ko'));
+  };
+
+  SAT.enrichAssessmentPack = function enrichAssessmentPack(pack, assessments) {
+    const members = SAT.sortPackAssessments(assessments);
+    const starts = members.map((a) => Number(a.lessonStart)).filter((n) => Number.isFinite(n));
+    const ends = members.map((a) => Number(a.lessonEnd)).filter((n) => Number.isFinite(n));
+    const publishedTestCount = members.filter((a) =>
+      (a.versions || []).some((v) => v.status === 'published')
+    ).length;
+    const statuses = members.map((a) => a.latestVersionStatus).filter(Boolean);
+    let latestVersionStatus = '';
+    if (statuses.includes('published')) latestVersionStatus = 'published';
+    else if (statuses.includes('draft')) latestVersionStatus = 'draft';
+    else if (statuses.includes('archived')) latestVersionStatus = 'archived';
+    else latestVersionStatus = statuses[0] || '';
+    const status = SAT.normalizePackStatus(pack?.status);
+    const level = SAT.normalizeLevel ? SAT.normalizeLevel(pack?.level) : String(pack?.level || '').trim();
+    return {
+      ...pack,
+      id: pack?.id,
+      packKey: pack?.id || '',
+      title: String(pack?.title || '').trim() || SAT.assessmentPackTitle(level, pack?.assessmentType),
+      level,
+      assessmentType: String(pack?.assessmentType || '').trim(),
+      status,
+      assessments: members,
+      testCount: members.length,
+      publishedTestCount,
+      coverageStart: starts.length ? Math.min(...starts) : null,
+      coverageEnd: ends.length ? Math.max(...ends) : null,
+      latestVersionStatus,
+      anyActive: status === SAT.PACK_STATUS_ACTIVE,
+      versionCount: members.reduce((n, a) => n + (Number(a.versionCount) || 0), 0),
+    };
+  };
+
+  SAT.unassignedLibraryAssessments = function unassignedLibraryAssessments(libraryRows) {
+    return (libraryRows || []).filter((row) => !row?.assessmentPackId);
+  };
+
+  SAT.composeAssessmentPacks = function composeAssessmentPacks(packs, libraryRows) {
+    const rows = libraryRows || [];
+    const byPack = new Map();
+    rows.forEach((row) => {
+      const packId = row?.assessmentPackId;
+      if (!packId) return;
+      if (!byPack.has(packId)) byPack.set(packId, []);
+      byPack.get(packId).push(row);
+    });
+    return (packs || [])
+      .map((pack) => SAT.enrichAssessmentPack(pack, byPack.get(pack.id) || []))
+      .sort((a, b) => String(a.title).localeCompare(String(b.title), 'ko'));
   };
 
   SAT.filterAssessmentPacks = function filterAssessmentPacks(packs, { level, assessmentType, active } = {}) {
@@ -478,20 +510,27 @@
     return (packs || []).filter((pack) => {
       if (lvl && pack.level !== lvl) return false;
       if (type && pack.assessmentType !== type) return false;
-      if (active === 'active' && pack.anyActive === false) return false;
-      if (active === 'inactive' && pack.anyActive !== false) return false;
+      if (active === 'active' && SAT.isPackArchived(pack)) return false;
+      if (active === 'inactive' && !SAT.isPackArchived(pack)) return false;
       return true;
     });
   };
 
   SAT.packsForClassLevel = function packsForClassLevel(packs, cls) {
     const lvl = SAT.normalizeLevel ? SAT.normalizeLevel(cls?.level) : String(cls?.level || '').trim();
-    if (!lvl) return packs || [];
-    return (packs || []).filter((pack) => pack.level === lvl);
+    return (packs || []).filter((pack) => {
+      if (SAT.isPackArchived(pack)) return false;
+      if (lvl && pack.level !== lvl) return false;
+      return true;
+    });
+  };
+
+  SAT.assignablePacksForClass = function assignablePacksForClass(packs, cls) {
+    return SAT.packsForClassLevel(packs, cls).filter((pack) => Number(pack.publishedTestCount) > 0);
   };
 
   SAT.defaultPackKeyForClass = function defaultPackKeyForClass(packs, cls) {
-    const list = SAT.packsForClassLevel(packs, cls);
+    const list = SAT.assignablePacksForClass(packs, cls);
     if (list.length === 1) return list[0].packKey;
     const cq = list.filter((pack) => pack.assessmentType === SAT.ASSESSMENT_TYPE_CQ);
     if (cq.length === 1) return cq[0].packKey;
@@ -499,10 +538,12 @@
   };
 
   SAT.findAssessmentPack = function findAssessmentPack(packs, packKey) {
-    return (packs || []).find((pack) => pack.packKey === packKey) || null;
+    if (!packKey) return null;
+    return (packs || []).find((pack) => pack.packKey === packKey || pack.id === packKey) || null;
   };
 
   SAT.publishedAssignOptionsForPack = function publishedAssignOptionsForPack(pack, cls) {
+    if (SAT.isPackArchived(pack)) return [];
     const rows = SAT.filterPublishedAssessmentsForClass(pack?.assessments || [], cls);
     return rows.flatMap((assessment) => (
       SAT.publishedVersionsOf(assessment.versions).map((version) => ({
@@ -519,10 +560,46 @@
   };
 
   SAT.formatExamInstanceListLabel = function formatExamInstanceListLabel(row) {
-    const pack = SAT.assessmentPackTitle(row?.level, row?.assessmentType);
+    const pack = String(row?.packTitle || '').trim()
+      || SAT.assessmentPackTitle(row?.level, row?.assessmentType);
     const test = SAT.formatTestDefinitionLabel(row);
     if (pack && test) return `${pack} · ${test}`;
     return row?.assessmentTitle || test || '—';
+  };
+
+  SAT.unusedPackDeleteReason = function unusedPackDeleteReason(pack, examInstances, results) {
+    if (!pack?.id) return '평가팩을 찾을 수 없습니다.';
+    const tests = pack.assessments || [];
+    if (!tests.length) return '';
+    const reasons = tests
+      .map((assessment) => SAT.unusedAssessmentDeleteReason(
+        assessment,
+        assessment.versions,
+        examInstances,
+        results,
+      ))
+      .filter(Boolean);
+    if (!reasons.length) return '';
+    return SAT.PACK_DELETE_BLOCKED_HISTORY;
+  };
+
+  SAT.canHardDeletePack = function canHardDeletePack(pack, examInstances, results) {
+    return SAT.unusedPackDeleteReason(pack, examInstances, results) === '';
+  };
+
+  SAT.formatUnusedPackDeleteConfirm = function formatUnusedPackDeleteConfirm(pack) {
+    const name = String(pack?.title || '').trim() || '이름 없음';
+    const count = Number(pack?.testCount) || (pack?.assessments || []).length || 0;
+    if (!count) {
+      return `빈 평가팩 '${name}'을 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다.`;
+    }
+    return `평가팩 '${name}'과 안의 미사용 시험 ${count}개를 삭제하시겠습니까?\n\n시행 기록이 없는 초안만 삭제됩니다.\n이 작업은 되돌릴 수 없습니다.`;
+  };
+
+  SAT.formatPackArchiveConfirm = function formatPackArchiveConfirm(pack, archive = true) {
+    const name = String(pack?.title || '').trim() || '이름 없음';
+    if (!archive) return `평가팩 '${name}'을 다시 활성화할까요?`;
+    return `평가팩 '${name}'을 보관할까요?\n\n새 시행 목록에서 숨깁니다. 기존 시험·결과 기록은 그대로 둡니다.`;
   };
 
   SAT.composeLibraryRows = function composeLibraryRows(assessments, versions) {
@@ -546,11 +623,14 @@
     });
   };
 
-  SAT.composeExamInstanceView = function composeExamInstanceView(instance, versions, assessments) {
+  SAT.composeExamInstanceView = function composeExamInstanceView(instance, versions, assessments, packs) {
     const version = (versions || []).find((v) => v.id === instance.assessmentVersionId) || null;
     const assessment = version
       ? (assessments || []).find((a) => a.id === version.assessmentId) || null
       : (assessments || []).find((a) => a.id === instance.assessmentId) || null;
+    const pack = assessment?.assessmentPackId
+      ? (packs || []).find((row) => row.id === assessment.assessmentPackId) || null
+      : null;
     return {
       ...instance,
       assessmentTitle: assessment?.title || '',
@@ -559,6 +639,8 @@
       lessonStart: assessment?.lessonStart,
       lessonEnd: assessment?.lessonEnd,
       assessmentId: version?.assessmentId || instance.assessmentId,
+      assessmentPackId: assessment?.assessmentPackId || null,
+      packTitle: pack?.title || '',
       versionNumber: version?.versionNumber || null,
       versionStatus: version?.status || '',
       choiceCount: SAT.resolveChoiceCount({ version, assessment }),

@@ -41,6 +41,13 @@
       inactiveTeacher: { select: 'no', insert: 'no', update: 'no', delete: 'no' },
       anon: { select: 'no', insert: 'no', update: 'no', delete: 'no' },
     },
+    assessment_packs: {
+      admin: { select: 'all', insert: 'yes', update: 'admin-only', delete: 'unused-or-empty' },
+      teacherA: { select: 'catalog-if-active-user', insert: 'no', update: 'no', delete: 'no' },
+      teacherB: { select: 'catalog-if-active-user', insert: 'no', update: 'no', delete: 'no' },
+      inactiveTeacher: { select: 'no', insert: 'no', update: 'no', delete: 'no' },
+      anon: { select: 'no', insert: 'no', update: 'no', delete: 'no' },
+    },
     assessments: {
       admin: { select: 'all-incl-draft', insert: 'yes', update: 'admin-only', delete: 'admin-only' },
       teacherA: { select: 'published-archived', insert: 'no', update: 'no', delete: 'no' },

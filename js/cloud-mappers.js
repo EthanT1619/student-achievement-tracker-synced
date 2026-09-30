@@ -27,6 +27,7 @@
     lesson_start: 'lessonStart',
     lesson_end: 'lessonEnd',
     created_by: 'createdBy',
+    assessment_pack_id: 'assessmentPackId',
     assessment_id: 'assessmentId',
     version_number: 'versionNumber',
     status: 'status',

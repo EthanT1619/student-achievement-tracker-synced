@@ -2724,6 +2724,7 @@ function runP7aLogicTests() {
     'classes',
     'students',
     'enrollments',
+    'assessment_packs',
     'assessments',
     'assessment_versions',
     'assessment_questions',
@@ -4466,27 +4467,36 @@ async function runP996LogicTests() {
   assert(rendererSrc.includes('시험 시행'), 'assign section is exam instance scheduling');
   assert(rendererSrc.includes('assign-packKey'), 'assign filters by pack');
   assert(rendererSrc.includes('PACK_COVERAGE_HINT'), 'coverage meaning is explained');
+  assert(rendererSrc.includes('add-assessment-pack'), 'create pack form exists');
+  assert(rendererSrc.includes('PACK_CREATE_LABEL'), 'create pack button copy exists');
+  assert(!rendererSrc.includes('첫 시험을 추가하면 평가팩이 만들어집니다'), 'empty pack is no longer derived from first test');
   assert(!/Lesson 1–2, 3–4, 5–6/.test(rendererSrc), 'lesson pairs are not hardcoded in UI');
 
+  const packEntities = [
+    { id: 'pack-dsc-cq', title: 'DSC CQ', level: 'DSC', assessmentType: 'CQ', status: 'active' },
+    { id: 'pack-dsc-vocab', title: 'DSC Vocab', level: 'DSC', assessmentType: 'Vocabulary', status: 'active' },
+    { id: 'pack-lsa-cq', title: 'LSA CQ', level: 'LSA', assessmentType: 'CQ', status: 'active' },
+  ];
   const packRows = SAT.composeLibraryRows([
     { id: 'a1', title: 'DSC CQ', assessmentType: 'CQ', level: 'DSC', lessonStart: 1, lessonEnd: 24, active: true },
-    { id: 'a2', title: 'L7', assessmentType: 'CQ', level: 'DSC', lessonStart: 7, lessonEnd: 8, active: true },
-    { id: 'b1', title: 'Vocab', assessmentType: 'Vocabulary', level: 'DSC', lessonStart: 1, lessonEnd: 2, active: true },
-    { id: 'c1', title: 'LSA CQ', assessmentType: 'CQ', level: 'LSA', lessonStart: 13, lessonEnd: 14, active: true },
+    { id: 'a2', title: 'L7', assessmentType: 'CQ', level: 'DSC', lessonStart: 7, lessonEnd: 8, active: true, assessmentPackId: 'pack-dsc-cq' },
+    { id: 'b1', title: 'Vocab', assessmentType: 'Vocabulary', level: 'DSC', lessonStart: 1, lessonEnd: 2, active: true, assessmentPackId: 'pack-dsc-vocab' },
+    { id: 'c1', title: 'LSA CQ', assessmentType: 'CQ', level: 'LSA', lessonStart: 13, lessonEnd: 14, active: true, assessmentPackId: 'pack-lsa-cq' },
   ], [
     { id: 'v1', assessmentId: 'a2', status: 'published', versionNumber: 1 },
     { id: 'v2', assessmentId: 'a1', status: 'draft', versionNumber: 1 },
     { id: 'v3', assessmentId: 'b1', status: 'published', versionNumber: 1 },
     { id: 'v4', assessmentId: 'c1', status: 'published', versionNumber: 1 },
   ]);
-  const packs = SAT.composeAssessmentPacks(packRows);
-  assert(packs.length === 3, 'packs group by level and type');
-  const dscCq = packs.find((p) => p.packKey === 'DSC::CQ');
-  assert(dscCq && dscCq.testCount === 2, 'DSC CQ pack contains both stored CQ tests');
-  assert(dscCq.coverageStart === 1 && dscCq.coverageEnd === 24, 'pack coverage is min-max of member lesson ranges');
-  assert(SAT.formatPackCoverageLabel(dscCq) === '1–24', 'coverage label uses member ranges');
+  const packs = SAT.composeAssessmentPacks(packEntities, packRows);
+  assert(packs.length === 3, 'packs come from pack entities, not derived level+type groups');
+  const dscCq = packs.find((p) => p.packKey === 'pack-dsc-cq');
+  assert(dscCq && dscCq.testCount === 1, 'DSC CQ pack contains only linked tests');
+  assert(dscCq.coverageStart === 7 && dscCq.coverageEnd === 8, 'pack coverage is min-max of member lesson ranges');
+  assert(SAT.formatPackCoverageLabel(dscCq) === '7–8', 'coverage label uses member ranges');
+  assert(SAT.unassignedLibraryAssessments(packRows).some((row) => row.id === 'a1'), 'legacy 1-24 stays unassigned');
   assert(SAT.formatTestDefinitionLabel({ lessonStart: 7, lessonEnd: 8 }) === 'Lesson 7–8', 'test label uses lesson range');
-  assert(SAT.defaultPackKeyForClass(packs, { level: 'DSC' }) === 'DSC::CQ', 'DSC class defaults to the only CQ pack');
+  assert(SAT.defaultPackKeyForClass(packs, { level: 'DSC' }) === 'pack-dsc-cq', 'DSC class defaults to the only CQ pack');
   const publishedOpts = SAT.publishedAssignOptionsForPack(dscCq, { level: 'DSC' });
   assert(publishedOpts.length === 1 && publishedOpts[0].id === 'v1', 'assign lists published tests only');
   assert(SAT.publishedAssignOptionsForPack(dscCq, { level: 'LSA' }).length === 0, 'other class levels cannot assign DSC tests');
@@ -4747,6 +4757,221 @@ function runP9eLogicTests() {
   assert(html.includes('aria-labelledby="confirm-modal-title"'), 'confirm dialog has accessible name');
 }
 
+async function runP997LogicTests() {
+  const SAT = loadSat([
+    'js/repository-error.js',
+    'js/cloud-mappers.js',
+    'js/auth-manager.js',
+    'js/enrollment-view.js',
+    'js/assessment-view.js',
+    'js/cloud-assessment-store.js',
+    'js/p9a-ux-contract.js',
+    'js/p7-audit-contract.js',
+  ]);
+
+  const mapped = SAT.mapDbRowToApp({
+    id: 'p1',
+    title: 'DSC CQ Test',
+    assessment_type: 'CQ',
+    level: 'DSC',
+    status: 'active',
+    assessment_pack_id: 'p1',
+  });
+  assert(mapped.assessmentPackId === 'p1', 'Assessment → Pack relation maps assessment_pack_id');
+  assert(mapped.assessmentType === 'CQ', 'pack type maps');
+
+  const emptyPack = SAT.enrichAssessmentPack({
+    id: 'empty-1',
+    title: 'DSC CQ Test',
+    level: 'DSC',
+    assessmentType: 'CQ',
+    status: 'active',
+  }, []);
+  assert(emptyPack.testCount === 0, 'empty pack create has 0 tests');
+  assert(SAT.formatPackCoverageLabel(emptyPack) === '—', 'empty pack coverage is dash');
+  assert(emptyPack.latestVersionStatus === '', 'empty pack has no version');
+  assert(SAT.canHardDeletePack(emptyPack, [], []) === true, 'empty pack safe delete');
+  assert(SAT.unusedPackDeleteReason(emptyPack, []) === '', 'empty pack has no delete block');
+  assert(SAT.formatUnusedPackDeleteConfirm(emptyPack).includes('빈 평가팩'), 'empty pack confirm names empty');
+
+  const edited = SAT.enrichAssessmentPack({
+    ...emptyPack,
+    title: 'DSC CQ Review',
+    level: 'DSC',
+    assessmentType: 'CQ',
+  }, []);
+  assert(edited.title === 'DSC CQ Review', 'pack edit keeps identity and new title');
+
+  const archived = SAT.enrichAssessmentPack({ ...emptyPack, status: 'archived' }, []);
+  assert(SAT.isPackArchived(archived) === true, 'pack archive sets archived');
+  assert(SAT.formatPackStatusLabel(archived.status) === '보관됨', 'archived pack status label');
+  assert(SAT.filterAssessmentPacks([emptyPack, archived], { active: 'inactive' }).length === 1, 'inactive filter is archived packs');
+  assert(SAT.assignablePacksForClass([emptyPack, archived], { level: 'DSC' }).length === 0, 'empty/archived packs are not assignable');
+
+  const usedTest = {
+    id: 'asmt-used',
+    title: 'Lesson 1–24',
+    assessmentPackId: 'used-pack',
+    versions: [{ id: 'pv', assessmentId: 'asmt-used', status: 'published', versionNumber: 1 }],
+  };
+  const usedPack = SAT.enrichAssessmentPack({
+    id: 'used-pack',
+    title: 'DSC CQ',
+    level: 'DSC',
+    assessmentType: 'CQ',
+    status: 'active',
+  }, [usedTest]);
+  const exams = [{ id: 'ei1', assessmentVersionId: 'pv' }];
+  const results = [{ examInstanceId: 'ei1' }];
+  assert(SAT.canHardDeletePack(usedPack, exams, results) === false, 'delete blocked by history');
+  assert(
+    SAT.unusedPackDeleteReason(usedPack, exams, results) === SAT.PACK_DELETE_BLOCKED_HISTORY,
+    'history shows archive-not-delete copy',
+  );
+  assert(
+    SAT.unusedAssessmentDeleteReason(usedTest, usedTest.versions, exams, results) === SAT.DELETE_BLOCKED_PUBLISHED
+      || SAT.unusedAssessmentDeleteReason(usedTest, usedTest.versions, exams, results) === SAT.DELETE_BLOCKED_RESULT
+      || SAT.unusedAssessmentDeleteReason(usedTest, usedTest.versions, exams, results) === SAT.DELETE_BLOCKED_EXAM,
+    'legacy DSC CQ 1-24 keeps its own delete reason',
+  );
+
+  const sameTypePacks = SAT.composeAssessmentPacks([
+    { id: 'reg', title: 'DSC CQ Regular', level: 'DSC', assessmentType: 'CQ', status: 'active' },
+    { id: 'rev', title: 'DSC CQ Review', level: 'DSC', assessmentType: 'CQ', status: 'active' },
+  ], []);
+  assert(sameTypePacks.length === 2, 'same level+type can be two first-class packs');
+  assert(sameTypePacks.every((p) => p.testCount === 0), 'both can be empty');
+
+  const testsInPack = SAT.composeAssessmentPacks(
+    [{ id: 'p-list', title: 'DSC CQ', level: 'DSC', assessmentType: 'CQ', status: 'active' }],
+    SAT.composeLibraryRows([
+      { id: 't1', title: 'Lesson 1–2', assessmentPackId: 'p-list', lessonStart: 1, lessonEnd: 2, assessmentType: 'CQ', level: 'DSC' },
+      { id: 't2', title: 'Lesson 3–4', assessmentPackId: 'p-list', lessonStart: 3, lessonEnd: 4, assessmentType: 'CQ', level: 'DSC' },
+    ], [
+      { id: 'tv1', assessmentId: 't1', status: 'published', versionNumber: 1 },
+      { id: 'tv2', assessmentId: 't2', status: 'draft', versionNumber: 1 },
+    ]),
+  );
+  assert(testsInPack[0].assessments.map((a) => a.id).join(',') === 't1,t2', 'Pack → Test list is ordered by lesson');
+  assert(testsInPack[0].publishedTestCount === 1, 'published test count is member-based');
+
+  const instanceBefore = { id: 'ei-keep', assessmentVersionId: 'pv', classId: 'c1' };
+  const viewed = SAT.composeExamInstanceView(
+    instanceBefore,
+    usedTest.versions,
+    [{ id: 'asmt-used', title: 'Lesson 1–24', assessmentType: 'CQ', level: 'DSC', lessonStart: 1, lessonEnd: 24, assessmentPackId: 'used-pack' }],
+    [{ id: 'used-pack', title: 'DSC CQ' }],
+  );
+  assert(viewed.id === 'ei-keep', 'ExamInstance unaffected by pack compose');
+  assert(viewed.assessmentVersionId === 'pv', 'instance still points at the same version');
+  assert(viewed.packTitle === 'DSC CQ', 'instance label can use pack title without rewriting rows');
+  const resultRow = { id: 'r1', examInstanceId: 'ei1', answers: { q1: '1' } };
+  assert(resultRow.examInstanceId === 'ei1', 'Result unaffected');
+
+  const created = { packs: [], assessments: [], versions: [], deletedPacks: [] };
+  const repo = {
+    async listAssessmentPacks() { return created.packs; },
+    async listAssessments() { return created.assessments; },
+    async listAllAssessmentVersions() { return created.versions; },
+    async listExamInstances() { return []; },
+    async createAssessmentPack(data) {
+      const row = { id: `pack-${created.packs.length + 1}`, status: 'active', ...data };
+      created.packs.push(row);
+      return row;
+    },
+    async updateAssessmentPack(id, patch) {
+      const row = created.packs.find((p) => p.id === id);
+      Object.assign(row, patch);
+      return row;
+    },
+    async deleteUnusedAssessmentPack(id) {
+      created.deletedPacks.push(id);
+      created.packs = created.packs.filter((p) => p.id !== id);
+      return id;
+    },
+    async createAssessment(data) {
+      const row = { id: `a-${created.assessments.length + 1}`, ...data };
+      created.assessments.push(row);
+      return row;
+    },
+    async createDraftAssessmentVersion(data) {
+      const row = { id: `v-${created.versions.length + 1}`, status: 'draft', versionNumber: 1, ...data };
+      created.versions.push(row);
+      return row;
+    },
+    async createAssessmentQuestions() { return []; },
+    async updateAssessment(id, patch) {
+      const row = created.assessments.find((a) => a.id === id);
+      Object.assign(row, patch);
+      return row;
+    },
+  };
+  const adminAuth = { getState: () => ({ user: { id: 'u1' }, profile: { role: 'admin', active: true } }) };
+  const store = new SAT.CloudAssessmentStore(repo, adminAuth);
+  const pack = await store.createAssessmentPack({ title: 'DSC CQ Test', level: 'DSC', assessmentType: 'CQ' });
+  assert(pack.title === 'DSC CQ Test', 'store creates empty pack');
+  assert(store.packs.length === 1, 'created pack is listed');
+  assert(store.composedPacks()[0].testCount === 0, 'created pack has 0 tests');
+
+  const added = await store.createAssessment({
+    title: 'Lesson 1–2',
+    assessmentType: 'CQ',
+    level: 'DSC',
+    lessonStart: 1,
+    lessonEnd: 2,
+    applyCqBlueprint: false,
+    assessmentPackId: pack.id,
+  });
+  assert(added.assessment.assessmentPackId === pack.id, 'new test belongs to the pack');
+  assert(store.composedPacks()[0].testCount === 1, 'pack test list includes the new assessment');
+
+  await store.updateAssessmentPack(pack.id, { title: 'DSC CQ Regular' });
+  assert(store.getPack(pack.id).title === 'DSC CQ Regular', 'pack edit persists title');
+
+  await store.setPackStatus(pack.id, 'archived');
+  assert(SAT.isPackArchived(store.getPack(pack.id)) === true, 'pack archive persists');
+  await store.setPackStatus(pack.id, 'active');
+  await store.deleteUnusedPack(pack.id);
+  assert(created.deletedPacks.includes(pack.id), 'pack with unused draft assessment can delete');
+
+  const emptyCreated = await store.createAssessmentPack({ title: 'To Delete', level: 'DSC', assessmentType: 'CQ' });
+  await store.deleteUnusedPack(emptyCreated.id);
+  assert(created.deletedPacks.includes(emptyCreated.id), 'empty pack safe delete calls repo');
+
+  const teacherStore = new SAT.CloudAssessmentStore(repo, {
+    getState: () => ({ user: { id: 'u3' }, profile: { role: 'teacher', active: true } }),
+  });
+  let teacherDenied = false;
+  try {
+    await teacherStore.createAssessmentPack({ title: 'Nope', level: 'DSC', assessmentType: 'CQ' });
+  } catch (err) {
+    teacherDenied = /관리자만/.test(err.message || '');
+  }
+  assert(teacherDenied, 'teacher cannot create packs');
+
+  const rendererSrc = readFileSync(join(root, 'js/renderer.js'), 'utf8');
+  const appSrc = readFileSync(join(root, 'js/app.js'), 'utf8');
+  const repoSrc = readFileSync(join(root, 'js/cloud-repository.js'), 'utf8');
+  const patch = readFileSync(join(root, 'P9_97_ASSESSMENT_PACKS_PATCH.sql'), 'utf8');
+  const migration = readFileSync(join(root, 'supabase/migrations/005_assessment_packs.sql'), 'utf8');
+  assert(rendererSrc.includes('평가팩 만들기') || rendererSrc.includes('PACK_CREATE_LABEL'), 'list has create pack control');
+  assert(rendererSrc.includes('delete-unused-pack'), 'pack delete action exists');
+  assert(rendererSrc.includes('archive-assessment-pack'), 'pack archive action exists');
+  assert(rendererSrc.includes('link-assessment-pack'), 'unassigned tests can be linked');
+  assert(rendererSrc.includes('UNASSIGNED_ASSESSMENTS_HINT'), 'unassigned section is explained');
+  assert(appSrc.includes('submitAddAssessmentPack'), 'create pack handler is wired');
+  assert(appSrc.includes('deleteUnusedAssessmentPack'), 'pack delete handler is wired');
+  assert(repoSrc.includes('assessmentPackId'), 'repository writes pack FK');
+  assert(repoSrc.includes('delete_unused_assessment_pack'), 'repository calls pack delete RPC');
+  assert(patch.includes('create table if not exists public.assessment_packs'), 'patch creates packs table');
+  assert(patch.includes('add column if not exists assessment_pack_id'), 'patch adds nullable FK');
+  assert(!/update\s+public\.assessments\s+set\s+assessment_pack_id/i.test(patch), 'patch does not backfill pack membership');
+  assert(!/Lesson 1–2/.test(patch), 'patch does not split 1-24 into lesson pairs');
+  assert(!/service_role/i.test(patch.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')), 'patch body does not use service_role');
+  assert(migration.includes('references public.assessment_packs'), 'canonical migration has FK');
+  assert(SAT.P7A_PERMISSION_MATRIX.assessment_packs.teacherA.insert === 'no', 'teachers cannot write packs');
+}
+
 try {
   const groupCount = runTests();
   console.log(`All ${groupCount} test groups passed.`);
@@ -4792,6 +5017,8 @@ try {
   console.log('P9.961 logic unit tests passed.');
   runP10LogicTests();
   console.log('P10 logic unit tests passed.');
+  await runP997LogicTests();
+  console.log('P9.97 assessment pack management tests passed.');
   process.exit(0);
 } catch (err) {
   console.error('Test failed:', err.message);

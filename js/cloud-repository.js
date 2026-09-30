@@ -287,6 +287,50 @@
       );
     }
 
+    // ----- assessment packs -----
+
+    async listAssessmentPacks() {
+      return this._rows(
+        this._db().from('assessment_packs').select('*').order('title'),
+        'assessmentPacks.list'
+      );
+    }
+
+    async createAssessmentPack(data) {
+      const payload = SAT.mapAppPatchToDb(data, [
+        'title',
+        'assessmentType',
+        'level',
+        'status',
+        'createdBy',
+      ]);
+      return this._write(
+        this._db().from('assessment_packs').insert(payload).select(),
+        'assessmentPacks.create'
+      );
+    }
+
+    async updateAssessmentPack(id, patch) {
+      const payload = SAT.mapAppPatchToDb(patch, [
+        'title',
+        'assessmentType',
+        'level',
+        'status',
+      ]);
+      return this._write(
+        this._db().from('assessment_packs').update(payload).eq('id', id).select(),
+        'assessmentPacks.update'
+      );
+    }
+
+    async deleteUnusedAssessmentPack(id) {
+      return this._rpc(
+        'delete_unused_assessment_pack',
+        { p_pack_id: id },
+        'assessmentPacks.deleteUnused'
+      );
+    }
+
     // ----- assessments -----
 
     async listAssessments({ activeOnly } = {}) {
@@ -311,6 +355,7 @@
         'lessonEnd',
         'active',
         'createdBy',
+        'assessmentPackId',
       ]);
       return this._write(
         this._db().from('assessments').insert(payload).select(),
@@ -326,6 +371,7 @@
         'lessonStart',
         'lessonEnd',
         'active',
+        'assessmentPackId',
       ]);
       return this._write(
         this._db().from('assessments').update(payload).eq('id', id).select(),

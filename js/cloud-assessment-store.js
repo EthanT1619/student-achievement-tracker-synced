@@ -15,6 +15,8 @@
       this.error = null;
       this.assessments = [];
       this.versions = [];
+      this.packs = [];
+      this.packLoadError = null;
       this.questionsByVersionId = Object.create(null);
       this.examInstances = [];
       this._generation = 0;
@@ -50,12 +52,22 @@
       this.error = null;
       this.assessments = [];
       this.versions = [];
+      this.packs = [];
+      this.packLoadError = null;
       this.questionsByVersionId = Object.create(null);
       this.examInstances = [];
     }
 
     libraryRows() {
       return SAT.composeLibraryRows(this.assessments, this.versions);
+    }
+
+    composedPacks() {
+      return SAT.composeAssessmentPacks(this.packs, this.libraryRows());
+    }
+
+    getPack(id) {
+      return this.packs.find((p) => p.id === id) || null;
     }
 
     versionsFor(assessmentId) {
@@ -89,7 +101,7 @@
     examInstancesForClass(classId) {
       return this.examInstances
         .filter((row) => row.classId === classId)
-        .map((row) => SAT.composeExamInstanceView(row, this.versions, this.assessments));
+        .map((row) => SAT.composeExamInstanceView(row, this.versions, this.assessments, this.packs));
     }
 
     async refresh() {
@@ -99,16 +111,23 @@
       this.error = null;
       try {
         const repo = this._repo();
+        const packResult = typeof repo.listAssessmentPacks === 'function'
+          ? await repo.listAssessmentPacks()
+            .then((rows) => ({ packs: rows, error: null }))
+            .catch((err) => ({ packs: [], error: err }))
+          : { packs: [], error: null };
         const [assessments, versions, examInstances] = await Promise.all([
           repo.listAssessments(),
           repo.listAllAssessmentVersions(),
           repo.listExamInstances(),
         ]);
         if (gen !== this._generation) return this;
+        this.packs = packResult.packs;
+        this.packLoadError = packResult.error;
         this.assessments = assessments;
         this.versions = versions;
         this.examInstances = examInstances;
-        this.status = assessments.length ? STATES.READY : STATES.EMPTY;
+        this.status = (assessments.length || this.packs.length) ? STATES.READY : STATES.EMPTY;
         this.error = null;
       } catch (err) {
         if (gen !== this._generation) return this;
@@ -149,7 +168,7 @@
       return this.questionsByVersionId;
     }
 
-    async createAssessment({ title, assessmentType, level, lessonStart, lessonEnd, applyCqBlueprint, choiceCount }) {
+    async createAssessment({ title, assessmentType, level, lessonStart, lessonEnd, applyCqBlueprint, choiceCount, assessmentPackId }) {
       const createdBy = this.currentUserId();
       if (!createdBy) {
         throw SAT.createRepositoryError({
@@ -159,6 +178,7 @@
       }
       const type = String(assessmentType || '').trim() || SAT.ASSESSMENT_TYPE_CQ;
       const lvl = SAT.normalizeLevel(level);
+      const packId = String(assessmentPackId || '').trim() || null;
       const assessment = await this._repo().createAssessment({
         title: String(title || '').trim(),
         assessmentType: type,
@@ -167,6 +187,7 @@
         lessonEnd: lessonEnd === '' || lessonEnd == null ? null : Number(lessonEnd),
         active: true,
         createdBy,
+        assessmentPackId: packId,
       });
       let version = null;
       let questions = [];
@@ -240,6 +261,94 @@
       const row = await this._repo().updateAssessment(id, { active: Boolean(active) });
       await this.refresh();
       return row;
+    }
+
+    async assignAssessmentToPack(assessmentId, packId) {
+      if (!this.canAuthor()) {
+        throw SAT.createRepositoryError({
+          code: 'VALIDATION',
+          message: '평가팩 연결은 관리자만 할 수 있습니다.',
+        }, 'assessments.assignPack');
+      }
+      const row = await this._repo().updateAssessment(assessmentId, {
+        assessmentPackId: String(packId || '').trim() || null,
+      });
+      await this.refresh();
+      return row;
+    }
+
+    async createAssessmentPack({ title, assessmentType, level }) {
+      if (!this.canAuthor()) {
+        throw SAT.createRepositoryError({
+          code: 'VALIDATION',
+          message: '평가팩 작성은 관리자만 할 수 있습니다.',
+        }, 'assessmentPacks.create');
+      }
+      const createdBy = this.currentUserId();
+      if (!createdBy) {
+        throw SAT.createRepositoryError({
+          code: 'VALIDATION',
+          message: '로그인 정보를 확인할 수 없습니다.',
+        }, 'assessmentPacks.create');
+      }
+      const type = String(assessmentType || '').trim() || SAT.ASSESSMENT_TYPE_CQ;
+      const lvl = SAT.normalizeLevel(level);
+      const name = String(title || '').trim() || SAT.assessmentPackTitle(lvl, type);
+      if (!name || !lvl || !type) {
+        throw SAT.createRepositoryError({
+          code: 'VALIDATION',
+          message: '평가팩 이름, 레벨, 유형을 입력해주세요.',
+        }, 'assessmentPacks.create');
+      }
+      const row = await this._repo().createAssessmentPack({
+        title: name,
+        assessmentType: type,
+        level: lvl,
+        status: SAT.PACK_STATUS_ACTIVE,
+        createdBy,
+      });
+      await this.refresh();
+      return row;
+    }
+
+    async updateAssessmentPack(id, patch) {
+      if (!this.canAuthor()) {
+        throw SAT.createRepositoryError({
+          code: 'VALIDATION',
+          message: '평가팩 수정은 관리자만 할 수 있습니다.',
+        }, 'assessmentPacks.update');
+      }
+      const payload = {};
+      if (patch?.title != null) payload.title = String(patch.title || '').trim();
+      if (patch?.assessmentType != null) payload.assessmentType = String(patch.assessmentType || '').trim();
+      if (patch?.level != null) payload.level = SAT.normalizeLevel(patch.level);
+      if (patch?.status != null) payload.status = SAT.normalizePackStatus(patch.status);
+      const row = await this._repo().updateAssessmentPack(id, payload);
+      await this.refresh();
+      return row;
+    }
+
+    async setPackStatus(id, status) {
+      return this.updateAssessmentPack(id, { status: SAT.normalizePackStatus(status) });
+    }
+
+    async deleteUnusedPack(packId) {
+      if (!this.canAuthor()) {
+        throw SAT.createRepositoryError({
+          code: 'VALIDATION',
+          message: '평가팩 삭제는 관리자만 할 수 있습니다.',
+        }, 'assessmentPacks.deleteUnused');
+      }
+      const pack = SAT.findAssessmentPack(this.composedPacks(), packId);
+      const reason = SAT.unusedPackDeleteReason(pack, this.examInstances);
+      if (reason) {
+        throw SAT.createRepositoryError({
+          code: 'VALIDATION',
+          message: reason,
+        }, 'assessmentPacks.deleteUnused');
+      }
+      await this._repo().deleteUnusedAssessmentPack(packId);
+      await this.refresh();
     }
 
     async createDraftVersion(assessmentId) {

@@ -75,6 +75,7 @@
         selectedAssessmentId: null,
         selectedVersionId: null,
         selectedPackKey: '',
+        editingPackId: null,
         assignClassId: '',
         assignVersionId: '',
         assignPackKey: '',
@@ -129,6 +130,7 @@
       selectedAssessmentId: null,
       selectedVersionId: null,
       selectedPackKey: '',
+      editingPackId: null,
       assignClassId: '',
       assignVersionId: '',
       assignPackKey: '',
@@ -553,6 +555,11 @@
       'cancel-transfer': () => this.cancelTransfer(),
       'select-assessment': () => void this.selectAssessment(action.dataset.id),
       'select-assessment-pack': () => this.selectAssessmentPack(action.dataset.packKey),
+      'toggle-edit-pack': () => this.toggleEditAssessmentPack(action.dataset.id),
+      'archive-assessment-pack': () => void this.setAssessmentPackStatus(action.dataset.id, SAT.PACK_STATUS_ARCHIVED),
+      'activate-assessment-pack': () => void this.setAssessmentPackStatus(action.dataset.id, SAT.PACK_STATUS_ACTIVE),
+      'delete-unused-pack': () => void this.deleteUnusedAssessmentPack(action.dataset.id),
+      'show-unused-pack-delete-reason': () => this.showUnusedPackDeleteReason(action.dataset.id),
       'select-version': () => void this.selectAssessmentVersion(action.dataset.id),
       'create-draft-version': () => void this.createDraftVersion(action.dataset.assessmentId),
       'publish-version': () => void this.publishAssessmentVersion(action.dataset.id),
@@ -871,6 +878,21 @@
 
     if (form.dataset.form === 'transfer-student') {
       void this.submitTransferStudent(form);
+      return;
+    }
+
+    if (form.dataset.form === 'add-assessment-pack') {
+      void this.submitAddAssessmentPack(form);
+      return;
+    }
+
+    if (form.dataset.form === 'edit-assessment-pack') {
+      void this.submitEditAssessmentPack(form);
+      return;
+    }
+
+    if (form.dataset.form === 'link-assessment-pack') {
+      void this.submitLinkAssessmentPack(form);
       return;
     }
 
@@ -1751,7 +1773,7 @@
     this.state.library.selectedAssessmentId = id;
     const assessment = this.assessmentStore.getAssessment(id);
     if (assessment) {
-      this.state.library.selectedPackKey = SAT.assessmentPackKey(assessment.level, assessment.assessmentType);
+      this.state.library.selectedPackKey = assessment.assessmentPackId || '';
     }
     const versions = this.assessmentStore.versionsFor(id);
     this.state.library.selectedVersionId = versions[0]?.id || null;
@@ -1767,15 +1789,159 @@
 
   selectAssessmentPack(packKey) {
     this.state.library.selectedPackKey = packKey || '';
+    this.state.library.editingPackId = null;
     const assessment = this.assessmentStore.getAssessment(this.state.library.selectedAssessmentId);
-    const currentKey = assessment
-      ? SAT.assessmentPackKey(assessment.level, assessment.assessmentType)
-      : '';
+    const currentKey = assessment?.assessmentPackId || '';
     if (currentKey !== this.state.library.selectedPackKey) {
       this.state.library.selectedAssessmentId = null;
       this.state.library.selectedVersionId = null;
     }
     this.renderer.render('exams');
+  }
+
+  toggleEditAssessmentPack(id) {
+    this.state.library.editingPackId = this.state.library.editingPackId === id ? null : (id || null);
+    this.renderer.render('exams');
+  }
+
+  async submitAddAssessmentPack(form) {
+    const submit = form.querySelector('[type="submit"]');
+    const fd = new FormData(form);
+    const result = await SAT.withMutationGuard(this, 'add-assessment-pack', async () => {
+      if (submit) submit.disabled = true;
+      try {
+        const created = await this.assessmentStore.createAssessmentPack({
+          title: fd.get('title'),
+          assessmentType: fd.get('assessmentType'),
+          level: fd.get('level'),
+        });
+        showToast('평가팩을 만들었습니다. 이제 시험을 추가할 수 있습니다.');
+        form.reset();
+        this.state.library.selectedPackKey = created?.id || '';
+        this.state.library.selectedAssessmentId = null;
+        this.state.library.selectedVersionId = null;
+        this.renderer.render('exams');
+      } catch (err) {
+        this.cloudErrorToast(err);
+        this.renderer.render('exams');
+      } finally {
+        if (submit) submit.disabled = false;
+      }
+    });
+    if (result.skipped) return;
+  }
+
+  async submitEditAssessmentPack(form) {
+    const submit = form.querySelector('[type="submit"]');
+    const fd = new FormData(form);
+    const packId = String(fd.get('packId') || '').trim();
+    const result = await SAT.withMutationGuard(this, `edit-assessment-pack-${packId}`, async () => {
+      if (submit) submit.disabled = true;
+      try {
+        await this.assessmentStore.updateAssessmentPack(packId, {
+          title: fd.get('title'),
+          assessmentType: fd.get('assessmentType'),
+          level: fd.get('level'),
+        });
+        showToast('평가팩을 수정했습니다.');
+        this.state.library.editingPackId = null;
+        this.renderer.render('exams');
+      } catch (err) {
+        this.cloudErrorToast(err);
+        this.renderer.render('exams');
+      } finally {
+        if (submit) submit.disabled = false;
+      }
+    });
+    if (result.skipped) return;
+  }
+
+  async submitLinkAssessmentPack(form) {
+    const fd = new FormData(form);
+    const assessmentId = String(fd.get('assessmentId') || '').trim();
+    const packId = String(fd.get('packId') || '').trim();
+    const result = await SAT.withMutationGuard(this, `link-assessment-pack-${assessmentId}`, async () => {
+      try {
+        await this.assessmentStore.assignAssessmentToPack(assessmentId, packId);
+        showToast('시험을 평가팩에 연결했습니다.');
+        this.state.library.selectedPackKey = packId;
+        this.state.library.selectedAssessmentId = assessmentId;
+        this.renderer.render('exams');
+      } catch (err) {
+        this.cloudErrorToast(err);
+        this.renderer.render('exams');
+      }
+    });
+    if (result.skipped) return;
+  }
+
+  async setAssessmentPackStatus(id, status) {
+    const pack = SAT.findAssessmentPack(this.assessmentStore.composedPacks(), id);
+    if (!pack) return;
+    const archive = SAT.normalizePackStatus(status) === SAT.PACK_STATUS_ARCHIVED;
+    const ok = await confirmDialog(SAT.formatPackArchiveConfirm(pack, archive), {
+      title: archive ? '평가팩 보관' : '평가팩 보관 해제',
+      confirmLabel: archive ? '보관' : '보관 해제',
+    });
+    if (!ok) return;
+    const result = await SAT.withMutationGuard(this, `pack-status-${id}`, async () => {
+      try {
+        await this.assessmentStore.setPackStatus(id, status);
+        showToast(archive ? '평가팩을 보관했습니다.' : '평가팩을 다시 활성화했습니다.');
+        this.renderer.render('exams');
+      } catch (err) {
+        this.cloudErrorToast(err);
+        this.renderer.render('exams');
+      }
+    });
+    if (result.skipped) return;
+  }
+
+  showUnusedPackDeleteReason(id) {
+    const pack = SAT.findAssessmentPack(this.assessmentStore.composedPacks(), id);
+    if (!pack) return;
+    const reason = SAT.unusedPackDeleteReason(
+      pack,
+      this.assessmentStore.examInstances,
+      this.resultStore?.results,
+    );
+    showToast(reason || SAT.PACK_DELETE_BLOCKED_HISTORY, 'error');
+  }
+
+  async deleteUnusedAssessmentPack(id) {
+    const pack = SAT.findAssessmentPack(this.assessmentStore.composedPacks(), id);
+    if (!pack) return;
+    const reason = SAT.unusedPackDeleteReason(
+      pack,
+      this.assessmentStore.examInstances,
+      this.resultStore?.results,
+    );
+    if (reason) {
+      showToast(reason, 'error');
+      return;
+    }
+    const ok = await confirmDialog(SAT.formatUnusedPackDeleteConfirm(pack), {
+      title: '평가팩 삭제',
+      confirmLabel: '삭제',
+      danger: true,
+    });
+    if (!ok) return;
+    const result = await SAT.withMutationGuard(this, `delete-pack-${id}`, async () => {
+      try {
+        await this.assessmentStore.deleteUnusedPack(id);
+        if (this.state.library.selectedPackKey === id) {
+          this.state.library.selectedPackKey = '';
+          this.state.library.selectedAssessmentId = null;
+          this.state.library.selectedVersionId = null;
+        }
+        showToast('평가팩을 삭제했습니다.');
+        this.renderer.render('exams');
+      } catch (err) {
+        this.cloudErrorToast(err);
+        this.renderer.render('exams');
+      }
+    });
+    if (result.skipped) return;
   }
 
   async selectAssessmentVersion(id) {
@@ -1807,16 +1973,15 @@
           lessonEnd,
           applyCqBlueprint: fd.get('applyCqBlueprint') === 'on',
           choiceCount: fd.get('choiceCount'),
+          assessmentPackId: fd.get('assessmentPackId'),
         });
         showToast(created?.usedStandardBlueprint
           ? '평가팩에 시험을 추가했습니다.'
           : SAT.EMPTY_MANUAL_AUTHORING_HINT);
         form.reset();
         if (created?.assessment?.id) {
-          this.state.library.selectedPackKey = SAT.assessmentPackKey(
-            created.assessment.level,
-            created.assessment.assessmentType
-          );
+          this.state.library.selectedPackKey = created.assessment.assessmentPackId
+            || this.state.library.selectedPackKey;
           this.state.library.selectedAssessmentId = created.assessment.id;
           this.state.library.selectedVersionId = created.version?.id || null;
           if (created.version?.id) {
