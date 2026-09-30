@@ -4528,6 +4528,11 @@ async function runP996LogicTests() {
   const patch = readFileSync(join(root, 'P9_96_AUTHORING_FREEDOM_PATCH.sql'), 'utf8');
   assert(patch.includes('delete_unused_assessment'), 'patch adds delete RPC');
   assert(patch.includes('can_edit_tracker_curriculum()'), 'patch gates on admin helper');
+  assert(
+    patch.toLowerCase().indexOf('delete from public.assessment_questions')
+      < patch.toLowerCase().indexOf('delete from public.assessment_versions'),
+    'unused delete removes questions before versions',
+  );
   assert(!/service_role/i.test(patch.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')), 'patch body does not use service_role');
 }
 
@@ -4972,6 +4977,80 @@ async function runP997LogicTests() {
   assert(SAT.P7A_PERMISSION_MATRIX.assessment_packs.teacherA.insert === 'no', 'teachers cannot write packs');
 }
 
+function runP998LogicTests() {
+  const SAT = loadSat([
+    'js/assessment-view.js',
+  ]);
+
+  const helpers = readFileSync(join(root, 'supabase/migrations/003_domain_helpers.sql'), 'utf8');
+  const p96 = readFileSync(join(root, 'P9_96_AUTHORING_FREEDOM_PATCH.sql'), 'utf8');
+  const p98 = readFileSync(join(root, 'P9_98_DRAFT_DELETE_ORDER_PATCH.sql'), 'utf8');
+  const packSql = readFileSync(join(root, 'P9_97_ASSESSMENT_PACKS_PATCH.sql'), 'utf8');
+  const trigger = helpers.slice(
+    helpers.indexOf('create or replace function public.sat_protect_published_questions()'),
+    helpers.indexOf('create trigger trg_assessment_questions_immutable_when_published'),
+  );
+  const rpc003 = helpers.slice(
+    helpers.indexOf('create or replace function public.delete_unused_assessment(p_assessment_id uuid)'),
+    helpers.indexOf('create or replace function public.force_delete_assessment(p_assessment_id uuid)'),
+  );
+
+  function questionsBeforeVersions(sql) {
+    const q = sql.toLowerCase().indexOf('delete from public.assessment_questions');
+    const v = sql.toLowerCase().indexOf('delete from public.assessment_versions');
+    return q >= 0 && v >= 0 && q < v;
+  }
+
+  assert(questionsBeforeVersions(rpc003), '003 RPC deletes questions before versions');
+  assert(questionsBeforeVersions(p96), 'P9.96 RPC deletes questions before versions');
+  assert(questionsBeforeVersions(p98), 'P9.98 RPC deletes questions before versions');
+  assert(packSql.includes('perform public.delete_unused_assessment'), 'pack delete reuses the assessment RPC');
+  assert(trigger.includes('Cannot delete questions of a % assessment version'), 'question trigger still blocks non-draft delete');
+  assert(trigger.includes("coalesce(v_status, 'missing')"), 'missing parent still errors, not allowed');
+  assert(!/if v_status is null then\s+return old/i.test(trigger), 'trigger does not allow missing parent');
+  assert(rpc003.includes("status is distinct from 'draft'"), 'unused delete still blocks published/archived');
+  assert(rpc003.includes('exam instance'), 'unused delete still blocks exam history');
+
+  const repoSrc = readFileSync(join(root, 'js/cloud-repository.js'), 'utf8');
+  const draftDelete = repoSrc.slice(
+    repoSrc.indexOf('async deleteDraftAssessmentVersion'),
+    repoSrc.indexOf('async updateAssessmentQuestion'),
+  );
+  assert(draftDelete.indexOf('assessment_questions') < draftDelete.indexOf('assessment_versions'), 'draft version cleanup deletes questions first');
+  assert(draftDelete.includes("eq('status', 'draft')"), 'draft version delete stays draft-only');
+
+  const unused = { id: 'del1', title: 'Lesson 1-2' };
+  const unusedVersions = [{ id: 'dv1', assessmentId: 'del1', status: 'draft' }];
+  assert(SAT.canHardDeleteAssessment(unused, unusedVersions, []) === true, 'draft Assessment delete still allowed by client rule');
+  assert(SAT.canHardDeleteAssessment(unused, [{ id: 'pv', status: 'published' }], []) === false, 'published version delete still blocked');
+  assert(SAT.canHardDeleteAssessment(unused, [{ id: 'av', status: 'archived' }], []) === false, 'archived version delete still blocked');
+  assert(SAT.canHardDeleteAssessment(unused, unusedVersions, [{ assessmentVersionId: 'dv1' }]) === false, 'ExamInstance still blocks delete');
+  assert(
+    SAT.unusedAssessmentDeleteReason(unused, unusedVersions, [{ id: 'ei1', assessmentVersionId: 'dv1' }], [{ examInstanceId: 'ei1' }])
+      === SAT.DELETE_BLOCKED_RESULT,
+    'Result history still blocks hard delete',
+  );
+
+  const emptyPack = SAT.enrichAssessmentPack({
+    id: 'empty-1',
+    title: 'Empty',
+    level: 'DSC',
+    assessmentType: 'CQ',
+    status: 'active',
+  }, []);
+  assert(SAT.canHardDeletePack(emptyPack, [], []) === true, 'empty Pack delete still allowed');
+  const draftPack = SAT.enrichAssessmentPack({
+    id: 'pack-draft',
+    title: 'DSC CQ',
+    level: 'DSC',
+    assessmentType: 'CQ',
+    status: 'active',
+  }, [{ id: 'a1', versions: unusedVersions }]);
+  assert(SAT.canHardDeletePack(draftPack, [], []) === true, 'draft-only pack delete still allowed by client rule');
+  assert(SAT.canHardDeletePack(draftPack, [{ assessmentVersionId: 'dv1' }], []) === false, 'pack with exam history still blocked');
+  assert(!/service_role/i.test(p98.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')), 'P9.98 does not use service_role');
+}
+
 try {
   const groupCount = runTests();
   console.log(`All ${groupCount} test groups passed.`);
@@ -5019,6 +5098,8 @@ try {
   console.log('P10 logic unit tests passed.');
   await runP997LogicTests();
   console.log('P9.97 assessment pack management tests passed.');
+  runP998LogicTests();
+  console.log('P9.98 draft delete order tests passed.');
   process.exit(0);
 } catch (err) {
   console.error('Test failed:', err.message);

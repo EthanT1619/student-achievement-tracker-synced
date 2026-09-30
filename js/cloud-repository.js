@@ -591,8 +591,21 @@
     }
 
     async deleteDraftAssessmentVersion(id) {
+      await this._rows(
+        this._db()
+          .from('assessment_questions')
+          .delete()
+          .eq('assessment_version_id', id)
+          .select('id'),
+        'assessmentQuestions.deleteForDraftVersion'
+      );
       return this._write(
-        this._db().from('assessment_versions').delete().eq('id', id).select('id, status'),
+        this._db()
+          .from('assessment_versions')
+          .delete()
+          .eq('id', id)
+          .eq('status', 'draft')
+          .select('id, status'),
         'assessmentVersions.deleteDraft'
       );
     }
